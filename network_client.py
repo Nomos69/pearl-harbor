@@ -20,14 +20,21 @@ class NetworkWorker(threading.Thread):
     def __init__(
         self,
         uri: str,
-        preferred_team: str,
-        token: str,
         incoming: queue.Queue[dict[str, Any]],
+        *,
+        mode: str,
+        preferred_team: str = "",
+        token: str = "",
+        lobby_code: str = "",
     ) -> None:
         super().__init__(daemon=True)
+        if mode not in {"host", "join"}:
+            raise ValueError("Network mode must be 'host' or 'join'.")
         self.uri = uri
+        self.mode = mode
         self.preferred_team = preferred_team
         self.token = token
+        self.lobby_code = lobby_code.strip().upper()
         self.incoming = incoming
         self.loop: asyncio.AbstractEventLoop | None = None
         self.outgoing: asyncio.Queue[dict[str, Any]] | None = None
@@ -92,15 +99,18 @@ class NetworkWorker(threading.Thread):
                         "round_trip_ms": max(0, round_trip_ms),
                     }
                 )
-                await websocket.send(
-                    json.dumps(
-                        {
-                            "type": "join",
-                            "preferred_team": self.preferred_team,
-                            "token": self.token,
-                        }
-                    )
-                )
+                if self.mode == "host":
+                    entry_message = {
+                        "type": "host_lobby",
+                        "preferred_team": self.preferred_team,
+                        "token": self.token,
+                    }
+                else:
+                    entry_message = {
+                        "type": "join_lobby",
+                        "lobby_code": self.lobby_code,
+                    }
+                await websocket.send(json.dumps(entry_message))
 
                 sender = asyncio.create_task(self._sender())
                 try:

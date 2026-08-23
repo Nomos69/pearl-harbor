@@ -22,12 +22,15 @@ from game import BOARD_SIZE, TEAMS, Board, GameError, team_assets, team_fleet
 
 LOGGER = logging.getLogger("battleship.server")
 MAX_MESSAGE_SIZE = 16 * 1024
+LOBBY_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+LOBBY_CODE_LENGTH = 6
 
 
 @dataclass(eq=False)
 class Player:
     connection: ServerConnection
     name: str
+    role: str
     board: Board | None = None
 
 
@@ -37,7 +40,15 @@ class BattleshipServer:
         self.players: list[Player] = []
         self.phase = "waiting"
         self.turn: Player | None = None
+        self.host: Player | None = None
+        self.lobby_code: str | None = None
         self.lock = asyncio.Lock()
+
+    @staticmethod
+    def create_lobby_code() -> str:
+        return "".join(
+            secrets.choice(LOBBY_CODE_ALPHABET) for _ in range(LOBBY_CODE_LENGTH)
+        )
 
     async def send(self, player: Player, payload: dict[str, Any]) -> None:
         try:
@@ -71,58 +82,111 @@ class BattleshipServer:
                 },
             )
 
-    async def handle_join(self, connection: ServerConnection, message: dict[str, Any]) -> Player | None:
-        supplied_token = str(message.get("token", ""))
-        if not secrets.compare_digest(supplied_token, self.token):
-            await connection.send(json.dumps({"type": "error", "message": "Invalid game token."}))
-            await connection.close(code=1008, reason="invalid token")
+    async def reject_entry(
+        self,
+        connection: ServerConnection,
+        message: str,
+        reason: str,
+        code: int = 1008,
+    ) -> None:
+        await connection.send(json.dumps({"type": "error", "message": message}))
+        await connection.close(code=code, reason=reason)
+
+    async def handle_lobby_entry(
+        self, connection: ServerConnection, message: dict[str, Any]
+    ) -> Player | None:
+        message_type = str(message.get("type", ""))
+        preferred_team = str(message.get("preferred_team", "")).strip()
+
+        if message_type == "host_lobby":
+            supplied_token = str(message.get("token", ""))
+            if not secrets.compare_digest(supplied_token, self.token):
+                await self.reject_entry(
+                    connection,
+                    "Invalid server host key.",
+                    "invalid host key",
+                )
+                return None
+            if preferred_team not in TEAMS:
+                await self.reject_entry(
+                    connection,
+                    "Choose US or Japan before hosting a lobby.",
+                    "invalid team",
+                )
+                return None
+        elif message_type == "join_lobby":
+            requested_code = str(message.get("lobby_code", "")).strip().upper()
+            if not requested_code:
+                await self.reject_entry(
+                    connection,
+                    "Enter the host's lobby code.",
+                    "missing lobby code",
+                )
+                return None
+        else:
+            await self.reject_entry(
+                connection,
+                "Choose Host Operation or Join Operation before connecting.",
+                "invalid lobby action",
+            )
             return None
 
-        preferred_team = str(
-            message.get("preferred_team", message.get("name", ""))
-        ).strip()
-
         async with self.lock:
-            if len(self.players) >= 2:
-                await connection.send(
-                    json.dumps({"type": "error", "message": "This game already has two players."})
-                )
-                await connection.close(code=1013, reason="game full")
-                return None
-
-            player_number = len(self.players) + 1
-            if player_number == 1:
-                if preferred_team not in TEAMS:
-                    await connection.send(
-                        json.dumps(
-                            {
-                                "type": "error",
-                                "message": "The first player must choose US or Japan.",
-                            }
-                        )
+            if message_type == "host_lobby":
+                if self.host is not None:
+                    await self.reject_entry(
+                        connection,
+                        "This operation server already has an active lobby.",
+                        "lobby already active",
+                        code=1013,
                     )
-                    await connection.close(code=1008, reason="invalid team")
                     return None
+                self.lobby_code = self.create_lobby_code()
                 assigned_team = preferred_team
                 assignment = "chosen"
+                role = "host"
+                player_number = 1
             else:
-                claimed_teams = {player.name for player in self.players}
-                assigned_team = next(team for team in TEAMS if team not in claimed_teams)
+                if self.host is None or self.lobby_code is None:
+                    await self.reject_entry(
+                        connection,
+                        "No lobby is being hosted on this server.",
+                        "lobby unavailable",
+                        code=1013,
+                    )
+                    return None
+                if not secrets.compare_digest(requested_code, self.lobby_code):
+                    await self.reject_entry(
+                        connection,
+                        "Lobby code not recognized.",
+                        "invalid lobby code",
+                    )
+                    return None
+                if len(self.players) >= 2:
+                    await self.reject_entry(
+                        connection,
+                        "This lobby already has two commanders.",
+                        "lobby full",
+                        code=1013,
+                    )
+                    return None
+                assigned_team = next(team for team in TEAMS if team != self.host.name)
                 assignment = "automatic"
+                role = "guest"
+                player_number = 2
 
             if any(player.name == assigned_team for player in self.players):
-                await connection.send(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "message": "No unclaimed country is available.",
-                        }
-                    )
+                await self.reject_entry(
+                    connection,
+                    "No unclaimed country is available.",
+                    "no available team",
+                    code=1013,
                 )
-                await connection.close(code=1013, reason="no available team")
                 return None
-            player = Player(connection=connection, name=assigned_team)
+            player = Player(connection=connection, name=assigned_team, role=role)
             self.players.append(player)
+            if role == "host":
+                self.host = player
             if len(self.players) == 2:
                 self.phase = "placement"
 
@@ -132,6 +196,8 @@ class BattleshipServer:
                 "type": "joined",
                 "player_number": player_number,
                 "team": assigned_team,
+                "role": role,
+                "lobby_code": self.lobby_code,
                 "assignment": assignment,
                 "preferred_team": preferred_team or None,
                 "board_size": BOARD_SIZE,
@@ -140,14 +206,23 @@ class BattleshipServer:
             },
         )
         LOGGER.info(
-            "%s joined as player %d (%s assignment; preference=%s)",
+            "%s joined lobby %s as %s/player %d (%s assignment; preference=%s)",
             assigned_team,
+            self.lobby_code,
+            role,
             player_number,
             assignment,
             preferred_team or "none",
         )
         if len(self.players) == 1:
-            await self.send(player, {"type": "waiting", "message": "Waiting for Player 2..."})
+            await self.send(
+                player,
+                {
+                    "type": "waiting",
+                    "lobby_code": self.lobby_code,
+                    "message": "Lobby open. Share the lobby code with Player 2.",
+                },
+            )
         else:
             await self.broadcast(
                 {"type": "players_ready", "players": [item.name for item in self.players]}
@@ -237,22 +312,49 @@ class BattleshipServer:
                 await self.send(player, {"type": "action_required", "action": "attack"})
 
     async def disconnect(self, player: Player) -> None:
+        remaining_players: list[Player] = []
+        host_departed = False
         async with self.lock:
             if player not in self.players:
                 return
             self.players.remove(player)
-            for remaining in self.players:
-                remaining.board = None
+            host_departed = player is self.host
+            remaining_players = list(self.players)
+            if host_departed:
+                self.players.clear()
+                self.host = None
+                self.lobby_code = None
+            else:
+                for remaining in self.players:
+                    remaining.board = None
             self.phase = "waiting"
             self.turn = None
         LOGGER.info("%s disconnected", player.name)
+        if host_departed:
+            for remaining in remaining_players:
+                await self.send(
+                    remaining,
+                    {
+                        "type": "lobby_closed",
+                        "message": "The host disconnected and closed the lobby.",
+                    },
+                )
+                await remaining.connection.close(code=1001, reason="host left")
+            return
         await self.broadcast(
             {
                 "type": "opponent_left",
-                "message": f"{player.name} disconnected. The room has been reset.",
+                "lobby_code": self.lobby_code,
+                "message": f"{player.name} disconnected. The host lobby remains open.",
             }
         )
-        await self.broadcast({"type": "waiting", "message": "Waiting for Player 2..."})
+        await self.broadcast(
+            {
+                "type": "waiting",
+                "lobby_code": self.lobby_code,
+                "message": "Lobby open. Share the lobby code with Player 2.",
+            }
+        )
 
     async def handler(self, connection: ServerConnection) -> None:
         player: Player | None = None
@@ -260,7 +362,7 @@ class BattleshipServer:
             json.dumps(
                 {
                     "type": "hello",
-                    "protocol": 1,
+                    "protocol": 2,
                     "server_time_ns": time.time_ns(),
                 }
             )
@@ -304,12 +406,17 @@ class BattleshipServer:
                     )
                     continue
                 if player is None:
-                    if message.get("type") != "join":
+                    if message.get("type") not in {"host_lobby", "join_lobby"}:
                         await connection.send(
-                            json.dumps({"type": "error", "message": "Join before playing."})
+                            json.dumps(
+                                {
+                                    "type": "error",
+                                    "message": "Host or join a lobby before playing.",
+                                }
+                            )
                         )
                         continue
-                    player = await self.handle_join(connection, message)
+                    player = await self.handle_lobby_entry(connection, message)
                     if player is None:
                         return
                     continue
@@ -339,7 +446,10 @@ def parse_args() -> argparse.Namespace:
 
 async def run(args: argparse.Namespace) -> None:
     if not args.token:
-        raise SystemExit("Set BATTLESHIP_TOKEN or pass --token. Refusing to start without a token.")
+        raise SystemExit(
+            "Set BATTLESHIP_TOKEN or pass --token. "
+            "Refusing to start without a private host key."
+        )
     if bool(args.certfile) != bool(args.keyfile):
         raise SystemExit("Provide both --certfile and --keyfile, or neither.")
     ssl_context = None

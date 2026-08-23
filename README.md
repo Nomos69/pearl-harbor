@@ -8,9 +8,11 @@ It does not use a browser, HTML, CSS, or JavaScript. An authoritative Python ser
 keeps both fleets private, validates turns, and exchanges JSON messages with each GUI
 over WebSockets.
 
-The first player to join chooses US or Japan. The server reserves that country and
-automatically assigns the other country to Player 2, even if both GUI windows initially
-show the same preference. There can never be two US players or two Japan players.
+The main menu separates **Host Operation** from **Join Operation**. The host authenticates
+with the private server host key, chooses US or Japan, and receives a random six-character
+lobby code. The guest enters that shareable code without choosing a country; the server
+always assigns the country opposing the host. There can never be two US players or two
+Japan players.
 
 The GUI uses five distinct realistic top-down ship illustrations for the carrier,
 battleship, cruiser, submarine, and destroyer. Pillow scales and rotates the transparent
@@ -37,9 +39,10 @@ harbor. Grid sizes and turns are balanced gameplay values, not real-world scale.
 The country-selection screen is a sourced historical dossier covering the
 Hawaii Operation, political and military leaders, the 7:55 a.m. first wave, the Japanese
 carrier force, and the historical role or fate of every ship represented in the game.
-Players choose US or Japan directly on its dossier card before continuing to token and
-server authorization. The five-ship rosters are clearly identified as balanced selections
-rather than complete historical orders of battle.
+The host chooses US or Japan directly on its dossier card before creating a lobby. A
+joining player bypasses country selection because its opposing fleet is assigned by the
+server. The five-ship rosters are clearly identified as balanced selections rather than
+complete historical orders of battle.
 
 Historical references: [U.S. Naval History and Heritage Command attack overview](https://www.history.navy.mil/research/library/online-reading-room/title-list-alphabetically/p/the-pearl-harbor-attack-7-december-1941.html),
 [NHHC Japanese forces](https://www.history.navy.mil/our-collections/photography/wars-and-events/world-war-ii/pearl-harbor-raid/japanese-forces-in-the-pearl-harbor-attack.html),
@@ -48,11 +51,11 @@ Historical references: [U.S. Naval History and Heritage Command attack overview]
 [Prime Minister's Office of Japan](https://japan.kantei.go.jp/past_cabinet/index.html).
 
 ```text
-Azure Ubuntu VM: headless Python WebSocket server
-                              ^
-                              | TCP 8765 / WebSocket
-                              v
-Ubuntu laptop:       native Python/Tkinter GUI client(s)
+Azure Ubuntu VM: WebSocket server + host GUI process
+                                      |
+                         TCP 8765 / WebSocket
+                                      |
+Ubuntu laptop: guest GUI + forwarded display for Azure host
 ```
 
 Follow these sections in order. Complete each check before moving to the next one.
@@ -72,14 +75,13 @@ chronyc tracking
 Check that `System clock synchronized: yes` appears. The time zones do not have to
 match because synchronization and game timestamps use UTC.
 
-Install Tkinter on the laptop only:
+Install Tkinter on every machine that runs a GUI. For the Azure-host-player setup,
+install Tkinter and X11 authorization support on the VM too:
 
 ```bash
-sudo apt install -y python3-tk
+sudo apt install -y python3-tk xauth
 python3 -c "import tkinter; print('Tkinter', tkinter.TkVersion)"
 ```
-
-The Azure server doesn't need Tkinter or a desktop environment.
 
 ## 2. Install the project on both machines
 
@@ -111,26 +113,27 @@ export BATTLESHIP_TOKEN='replace-with-a-long-random-value'
 python server.py
 ```
 
-Start the US desktop window in terminal 2:
+Start the first desktop window in terminal 2:
 
 ```bash
 cd "/path/to/Client-Server Application"
 source .venv/bin/activate
-python gui_client.py --team US --token 'replace-with-a-long-random-value'
+python gui_client.py
 ```
 
-Start the Japan desktop window in terminal 3:
+Start the second desktop window in terminal 3:
 
 ```bash
 cd "/path/to/Client-Server Application"
 source .venv/bin/activate
-python gui_client.py --team Japan --token 'replace-with-a-long-random-value'
+python gui_client.py
 ```
 
-Two native Pearl Harbor windows should appear. In Player 1's window choose **Start
-Operation**, select US or Japan, and join. In Player 2's window join using the same token;
-the server automatically assigns the unclaimed country. Each side receives its own
-historically named fleet. Place five ships, then click
+Two native Pearl Harbor windows should appear. In the first window choose **Host
+Operation**, select US or Japan, and enter the server host key. Copy the generated lobby
+code. In the second window choose **Join Operation** and enter that code; no country or
+host key is requested. The server automatically assigns the opposing country. Each side
+receives its own historically named fleet. Place five ships, then click
 **Lock deployment**. The side that connected first attacks first by
 clicking an unknown cell on the enemy grid. A hit earns another attack; the turn passes
 to the opponent only after a miss.
@@ -166,7 +169,7 @@ SSH into the Azure VM and run:
 ```bash
 cd "/path/to/Client-Server Application"
 source .venv/bin/activate
-export BATTLESHIP_TOKEN='the-same-long-random-value'
+export BATTLESHIP_TOKEN='a-long-private-host-key'
 python server.py
 ```
 
@@ -179,31 +182,34 @@ curl http://127.0.0.1:8765/healthz
 
 The first command should show `0.0.0.0:8765`; the second should print `OK`.
 
-## 6. Connect the laptop GUI to Azure
+## 6. Run the Azure host player and laptop guest
 
-On the Ubuntu laptop run the US side:
-
-```bash
-source .venv/bin/activate
-python gui_client.py \
-  --uri ws://AZURE_PUBLIC_IP:8765/ws \
-  --team US \
-  --token 'the-same-long-random-value'
-```
-
-For a two-player demonstration using only the Azure VM and one laptop, open the Japan
-side from another terminal:
+The Azure VM is headless, so open a second laptop terminal with X11 forwarding. The
+process runs on Azure while its native Tkinter window is displayed on the laptop:
 
 ```bash
+ssh -X -i ~/.ssh/pearl-harbor-key.pem azureuser@AZURE_PUBLIC_IP
+cd ~/pearl-harbor
 source .venv/bin/activate
 python gui_client.py \
-  --uri ws://AZURE_PUBLIC_IP:8765/ws \
-  --team Japan \
-  --token 'the-same-long-random-value'
+  --uri ws://127.0.0.1:8765/ws
 ```
 
-Alternatively, Player 2 can run the same GUI on a different Ubuntu desktop. An Azure
-VPS is normally headless, so it runs the server rather than a desktop game window.
+In that window choose **Host Operation**, select the host country, and enter the private
+server host key. Copy the displayed six-character lobby code.
+
+On the Ubuntu laptop, open its own local GUI:
+
+```bash
+cd "$HOME/Special Topics in Networking/Client-Server Application"
+source .venv/bin/activate
+python gui_client.py \
+  --uri ws://AZURE_PUBLIC_IP:8765/ws
+```
+
+Choose **Join Operation**, enter the lobby code, and connect. The laptop guest is assigned
+the country opposing the Azure host. The lobby code is shareable; the server host key is
+not.
 
 If the GUI cannot connect, check in this order: Azure server process, `ss`, UFW,
 Azure NSG source address, and the VM public IP.
@@ -222,13 +228,13 @@ sudo chown -R battleship:battleship /opt/battleship
 sudo cp deploy/battleship.service /etc/systemd/system/
 ```
 
-Generate and save a token:
+Generate and save the private server host key:
 
 ```bash
 GAME_TOKEN_INPUT="$(openssl rand -hex 32)"
 sudo install -m 600 -o root -g root /dev/null /etc/battleship.env
 printf 'BATTLESHIP_TOKEN=%s\n' "$GAME_TOKEN_INPUT" | sudo tee /etc/battleship.env >/dev/null
-printf 'Game token (save this for both clients): %s\n' "$GAME_TOKEN_INPUT"
+printf 'Server host key (give only to the lobby host): %s\n' "$GAME_TOKEN_INPUT"
 unset GAME_TOKEN_INPUT
 sudo systemctl daemon-reload
 sudo systemctl enable --now battleship

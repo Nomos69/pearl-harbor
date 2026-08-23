@@ -93,12 +93,19 @@ async def synchronize_clock(websocket: Any) -> None:
 
 
 async def play(args: argparse.Namespace) -> None:
-    token = args.token or os.environ.get("BATTLESHIP_TOKEN")
-    if not token:
-        raise SystemExit("Set BATTLESHIP_TOKEN or pass --token.")
-    name = args.team or await asyncio.to_thread(input, "Team (US or Japan): ")
-    if name not in TEAMS:
-        raise SystemExit("Team must be exactly US or Japan.")
+    token = args.token or os.environ.get("BATTLESHIP_TOKEN", "")
+    name = ""
+    lobby_code = args.lobby_code.strip().upper() if args.lobby_code else ""
+    if args.mode == "host":
+        if not token:
+            raise SystemExit("Hosting requires BATTLESHIP_TOKEN or --token.")
+        name = args.team or await asyncio.to_thread(input, "Host team (US or Japan): ")
+        if name not in TEAMS:
+            raise SystemExit("Team must be exactly US or Japan.")
+    elif not lobby_code:
+        lobby_code = (
+            await asyncio.to_thread(input, "Lobby code from the host: ")
+        ).strip().upper()
     fleet_spec = dict(FLEET)
     print(f"Connecting to {args.uri} ...")
 
@@ -108,17 +115,36 @@ async def play(args: argparse.Namespace) -> None:
             if hello.get("type") != "hello":
                 raise RuntimeError("The endpoint isn't a compatible Pearl Harbor server.")
             await synchronize_clock(websocket)
-            await websocket.send(json.dumps({"type": "join", "name": name.strip(), "token": token}))
+            if args.mode == "host":
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "host_lobby",
+                            "preferred_team": name.strip(),
+                            "token": token,
+                        }
+                    )
+                )
+            else:
+                await websocket.send(
+                    json.dumps(
+                        {"type": "join_lobby", "lobby_code": lobby_code}
+                    )
+                )
 
             async for raw_message in websocket:
                 message = json.loads(raw_message)
                 message_type = message.get("type")
                 if message_type == "joined":
+                    name = str(message["team"])
                     fleet_spec = {
                         str(ship_name): int(length)
                         for ship_name, length in message["fleet"].items()
                     }
-                    print(f"Joined as Player {message['player_number']} ({name.strip()}).")
+                    print(
+                        f"Joined lobby {message['lobby_code']} as "
+                        f"{message['role']} / Player {message['player_number']} ({name})."
+                    )
                 elif message_type in {"waiting", "opponent_left"}:
                     print(message["message"])
                 elif message_type == "players_ready":
@@ -157,8 +183,10 @@ async def play(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pearl Harbor terminal client")
     parser.add_argument("--uri", default="ws://127.0.0.1:8765")
+    parser.add_argument("--mode", choices=("host", "join"), default="host")
     parser.add_argument("--team", choices=TEAMS)
     parser.add_argument("--token")
+    parser.add_argument("--lobby-code", default="")
     return parser.parse_args()
 
 

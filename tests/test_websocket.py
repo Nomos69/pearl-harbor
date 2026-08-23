@@ -58,25 +58,35 @@ async def test_two_clients_can_join_place_and_attack():
             sync_reply = json.loads(await first.recv())
             assert sync_reply["type"] == "time_sync_reply"
             assert sync_reply["client_send_ms"] == 1000
-            await first.send(json.dumps({"type": "join", "name": "US", "token": "test-token"}))
-            first_joined = await receive_type(first, "joined")
-            assert first_joined["team"] == "US"
-            assert first_joined["assignment"] == "chosen"
-
-            # Player 2 may request the already-claimed side. The server assigns
-            # the only remaining country instead of rejecting the connection.
-            await second.send(
+            await first.send(
                 json.dumps(
                     {
-                        "type": "join",
+                        "type": "host_lobby",
                         "preferred_team": "US",
                         "token": "test-token",
                     }
                 )
             )
+            first_joined = await receive_type(first, "joined")
+            assert first_joined["team"] == "US"
+            assert first_joined["role"] == "host"
+            assert first_joined["assignment"] == "chosen"
+            lobby_code = first_joined["lobby_code"]
+            assert len(lobby_code) == 6
+
+            await second.send(
+                json.dumps(
+                    {
+                        "type": "join_lobby",
+                        "lobby_code": lobby_code.lower(),
+                    }
+                )
+            )
             second_joined = await receive_type(second, "joined")
             assert second_joined["team"] == "Japan"
+            assert second_joined["role"] == "guest"
             assert second_joined["assignment"] == "automatic"
+            assert second_joined["lobby_code"] == lobby_code
             await receive_type(first, "action_required")
             await receive_type(second, "action_required")
 
@@ -124,7 +134,7 @@ async def test_first_player_can_choose_japan_and_second_is_assigned_us():
             await first.send(
                 json.dumps(
                     {
-                        "type": "join",
+                        "type": "host_lobby",
                         "preferred_team": "Japan",
                         "token": "test-token",
                     }
@@ -132,20 +142,100 @@ async def test_first_player_can_choose_japan_and_second_is_assigned_us():
             )
             first_joined = await receive_type(first, "joined")
             assert first_joined["team"] == "Japan"
+            assert first_joined["role"] == "host"
             assert first_joined["assignment"] == "chosen"
 
             await second.send(
                 json.dumps(
                     {
-                        "type": "join",
-                        "preferred_team": "Japan",
-                        "token": "test-token",
+                        "type": "join_lobby",
+                        "lobby_code": first_joined["lobby_code"],
                     }
                 )
             )
             second_joined = await receive_type(second, "joined")
             assert second_joined["team"] == "US"
+            assert second_joined["role"] == "guest"
             assert second_joined["assignment"] == "automatic"
+
+
+@pytest.mark.asyncio
+async def test_join_rejects_an_unknown_lobby_code():
+    application = BattleshipServer("host-key")
+    async with serve(
+        application.handler, "127.0.0.1", 0, process_request=health_check
+    ) as websocket_server:
+        port = websocket_server.sockets[0].getsockname()[1]
+        uri = f"ws://127.0.0.1:{port}/ws"
+        async with connect(uri) as host, connect(uri) as guest:
+            await host.recv()
+            await guest.recv()
+            await host.send(
+                json.dumps(
+                    {
+                        "type": "host_lobby",
+                        "preferred_team": "US",
+                        "token": "host-key",
+                    }
+                )
+            )
+            await receive_type(host, "joined")
+
+            await guest.send(
+                json.dumps({"type": "join_lobby", "lobby_code": "WRONG2"})
+            )
+            error = await receive_type(guest, "error")
+            assert error["message"] == "Lobby code not recognized."
+
+
+@pytest.mark.asyncio
+async def test_host_disconnect_closes_lobby_and_allows_a_new_host():
+    application = BattleshipServer("host-key")
+    async with serve(
+        application.handler, "127.0.0.1", 0, process_request=health_check
+    ) as websocket_server:
+        port = websocket_server.sockets[0].getsockname()[1]
+        uri = f"ws://127.0.0.1:{port}/ws"
+        async with connect(uri) as host, connect(uri) as guest:
+            await host.recv()
+            await guest.recv()
+            await host.send(
+                json.dumps(
+                    {
+                        "type": "host_lobby",
+                        "preferred_team": "Japan",
+                        "token": "host-key",
+                    }
+                )
+            )
+            host_joined = await receive_type(host, "joined")
+            await guest.send(
+                json.dumps(
+                    {
+                        "type": "join_lobby",
+                        "lobby_code": host_joined["lobby_code"],
+                    }
+                )
+            )
+            await receive_type(guest, "joined")
+            await host.close()
+            closed = await receive_type(guest, "lobby_closed")
+            assert "host disconnected" in closed["message"].lower()
+
+        async with connect(uri) as replacement:
+            await replacement.recv()
+            await replacement.send(
+                json.dumps(
+                    {
+                        "type": "host_lobby",
+                        "preferred_team": "US",
+                        "token": "host-key",
+                    }
+                )
+            )
+            replacement_joined = await receive_type(replacement, "joined")
+            assert replacement_joined["role"] == "host"
+            assert replacement_joined["team"] == "US"
 
 
 @pytest.mark.asyncio
@@ -157,7 +247,11 @@ async def test_native_client_network_worker_connects_and_synchronizes():
         port = websocket_server.sockets[0].getsockname()[1]
         incoming = queue.Queue()
         worker = NetworkWorker(
-            f"ws://127.0.0.1:{port}/ws", "US", "desktop-token", incoming
+            f"ws://127.0.0.1:{port}/ws",
+            incoming,
+            mode="host",
+            preferred_team="US",
+            token="desktop-token",
         )
         worker.start()
 
@@ -168,7 +262,9 @@ async def test_native_client_network_worker_connects_and_synchronizes():
         assert clock_message["round_trip_ms"] >= 0
         assert joined_message["type"] == "joined"
         assert joined_message["team"] == "US"
+        assert joined_message["role"] == "host"
         assert joined_message["assignment"] == "chosen"
+        assert len(joined_message["lobby_code"]) == 6
         assert waiting_message["type"] == "waiting"
 
         worker.close()

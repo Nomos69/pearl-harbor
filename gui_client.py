@@ -69,6 +69,10 @@ class BattleshipGUI:
         self.latest_state: dict[str, Any] | None = None
         self.latest_event = "Awaiting first strike."
         self.assignment_note = ""
+        self.connection_mode = ""
+        self.lobby_code = ""
+        self.server_uri = args.uri
+        self.host_key = args.token or os.environ.get("BATTLESHIP_TOKEN", "")
         self.offset_text = "—"
         self.round_trip_text = "—"
         self.current_screen = ""
@@ -133,7 +137,7 @@ class BattleshipGUI:
             self.quote_after_id = None
         self.quote_text_label = None
         self.quote_source_label = None
-        for sequence in ("<Return>", "<Escape>", "1", "2", "3"):
+        for sequence in ("<Return>", "<Escape>", "1", "2", "3", "4"):
             self.root.unbind(sequence)
         for child in self.body.winfo_children():
             child.destroy()
@@ -328,9 +332,10 @@ class BattleshipGUI:
             fg=COLORS["alert"],
             font=("DejaVu Sans Mono", 8, "bold"),
         ).pack(anchor="w", pady=(0, 22))
-        self.command_button(inner, "[01]", "START OPERATION", self.show_briefing).pack(fill="x", pady=5)
-        self.command_button(inner, "[02]", "MISSION BRIEFING", self.show_briefing).pack(fill="x", pady=5)
-        self.command_button(inner, "[03]", "EXIT TO DESKTOP", self.on_close).pack(fill="x", pady=5)
+        self.command_button(inner, "[01]", "HOST OPERATION", self.show_briefing).pack(fill="x", pady=5)
+        self.command_button(inner, "[02]", "JOIN OPERATION", self.show_join_setup).pack(fill="x", pady=5)
+        self.command_button(inner, "[03]", "MISSION DOSSIER", self.show_briefing).pack(fill="x", pady=5)
+        self.command_button(inner, "[04]", "EXIT TO DESKTOP", self.on_close).pack(fill="x", pady=5)
         tk.Frame(inner, bg=COLORS["line"], height=1).pack(fill="x", pady=(24, 13))
         tk.Label(
             inner,
@@ -351,8 +356,9 @@ class BattleshipGUI:
             pady=7,
         ).place(relx=0.035, rely=0.88)
         self.root.bind("1", lambda _event: self.show_briefing())
-        self.root.bind("2", lambda _event: self.show_briefing())
-        self.root.bind("3", lambda _event: self.on_close())
+        self.root.bind("2", lambda _event: self.show_join_setup())
+        self.root.bind("3", lambda _event: self.show_briefing())
+        self.root.bind("4", lambda _event: self.on_close())
         self.root.bind("<Return>", lambda _event: self.show_briefing())
 
     def show_briefing(self) -> None:
@@ -465,7 +471,7 @@ class BattleshipGUI:
             f"CONTINUE WITH {chosen_team.upper()}  →"
             if chosen_team in TEAMS
             else "SELECT A COUNTRY TO CONTINUE",
-            self.show_connect,
+            self.show_host_setup,
         )
         proceed.configure(state="normal" if chosen_team in TEAMS else "disabled")
         proceed.pack(side="right", padx=(12, 0))
@@ -477,7 +483,7 @@ class BattleshipGUI:
         ).pack(side="right")
         self.root.bind("<Escape>", lambda _event: self.show_main_menu())
         if chosen_team in TEAMS:
-            self.root.bind("<Return>", lambda _event: self.show_connect())
+            self.root.bind("<Return>", lambda _event: self.show_host_setup())
 
     def historical_dossier(
         self,
@@ -573,7 +579,7 @@ class BattleshipGUI:
         self.team_choice.set(team)
         self.show_briefing()
 
-    def show_connect(self) -> None:
+    def show_host_setup(self) -> None:
         if self.team_choice.get() not in TEAMS:
             self.show_briefing()
             return
@@ -613,7 +619,7 @@ class BattleshipGUI:
         tk.Frame(hero, bg=COLORS["alert"], height=4).pack(fill="x", pady=(11, 28))
         tk.Label(
             hero,
-            text="ESTABLISH\nCOMMAND LINK",
+            text="HOST NEW\nOPERATION",
             justify="left",
             bg="#091419",
             fg="#f1eee6",
@@ -631,10 +637,10 @@ class BattleshipGUI:
         tk.Label(
             hero,
             text=(
-                "PLAYER 1  //  Selects the first national command\n"
-                "PLAYER 2  //  Receives the remaining command\n\n"
-                "Authenticate with the shared operation token.\n"
-                "All deployment coordinates remain classified."
+                "HOST  //  Selects the first national command\n"
+                "GUEST //  Receives the opposing command\n\n"
+                "Create a coded lobby on the operation server.\n"
+                "Share only the lobby code with your opponent."
             ),
             justify="left",
             bg="#091419",
@@ -646,7 +652,7 @@ class BattleshipGUI:
         for label, value in (
             ("NETWORK", "WEBSOCKET"),
             ("THEATER", "OAHU"),
-            ("ENCRYPTION", "TOKEN AUTH"),
+            ("HOST ACCESS", "PRIVATE KEY"),
         ):
             row = tk.Frame(diagnostic, bg="#131f24", padx=12, pady=5)
             row.pack(fill="x")
@@ -657,10 +663,10 @@ class BattleshipGUI:
         card.grid(row=0, column=1, sticky="nsew")
         inner = tk.Frame(card, bg=COLORS["panel"])
         inner.pack(fill="both", expand=True, padx=22, pady=18)
-        tk.Label(inner, text="COMMAND AUTHORIZATION", bg=COLORS["panel"], fg=COLORS["alert"], font=("DejaVu Sans Mono", 9, "bold")).pack(anchor="w")
+        tk.Label(inner, text="HOST CONTROL", bg=COLORS["panel"], fg=COLORS["alert"], font=("DejaVu Sans Mono", 9, "bold")).pack(anchor="w")
         tk.Label(
             inner,
-            text="VERIFY CREDENTIALS",
+            text="CREATE MULTIPLAYER LOBBY",
             bg=COLORS["panel"],
             fg=COLORS["text"],
             font=("DejaVu Sans Condensed", 25, "bold"),
@@ -703,16 +709,22 @@ class BattleshipGUI:
             cursor="hand2",
             font=("DejaVu Sans Mono", 7, "bold"),
         ).pack(side="right")
-        self.token_entry = self._labeled_entry(inner, "GAME TOKEN", self.args.token or os.environ.get("BATTLESHIP_TOKEN", ""), show="•")
-        self.uri_entry = self._labeled_entry(inner, "SERVER WEBSOCKET ADDRESS", self.args.uri)
+        self.token_entry = self._labeled_entry(
+            inner, "SERVER HOST KEY", self.host_key, show="•"
+        )
+        self.uri_entry = self._labeled_entry(
+            inner, "SERVER WEBSOCKET ADDRESS", self.server_uri
+        )
         tk.Label(
             inner,
-            text="SERVER OVERRIDE: Player 2 receives the unclaimed flag.",
+            text="SERVER GENERATES A SHAREABLE 6-CHARACTER LOBBY CODE.",
             bg=COLORS["panel"],
             fg=COLORS["gold"],
             font=("DejaVu Sans Mono", 8),
         ).pack(anchor="w", pady=(8, 0))
-        self.connect_button = self.make_button(inner, "AUTHORIZE & DEPLOY  →", self.connect_to_server)
+        self.connect_button = self.make_button(
+            inner, "CREATE SECURE LOBBY  →", self.host_lobby
+        )
         self.connect_button.configure(
             bg=COLORS["alert"],
             fg="#ffffff",
@@ -721,8 +733,154 @@ class BattleshipGUI:
         )
         self.connect_button.pack(fill="x", pady=(14, 0))
         self.command_button(inner, "[ESC]", "RETURN TO COUNTRY DOSSIERS", self.show_briefing).pack(fill="x", pady=(7, 0))
-        self.root.bind("<Return>", lambda _event: self.connect_to_server())
+        self.root.bind("<Return>", lambda _event: self.host_lobby())
         self.root.bind("<Escape>", lambda _event: self.show_briefing())
+
+    def show_join_setup(self) -> None:
+        self.current_screen = "join_setup"
+        self.clear_body()
+        self.tactical_backdrop()
+        shell = tk.Frame(
+            self.body,
+            bg="#111b20",
+            highlightbackground="#52626a",
+            highlightthickness=3,
+        )
+        shell.place(relx=.5, rely=.5, anchor="center", relwidth=.94, relheight=.91)
+        self.alert_stripe(shell)
+        layout = tk.Frame(shell, bg="#111b20", padx=12, pady=12)
+        layout.pack(fill="both", expand=True)
+        layout.columnconfigure(0, weight=5)
+        layout.columnconfigure(1, weight=4)
+        layout.rowconfigure(0, weight=1)
+
+        hero = tk.Frame(
+            layout,
+            bg="#091419",
+            padx=30,
+            pady=28,
+            highlightbackground=COLORS["steel"],
+            highlightthickness=2,
+        )
+        hero.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        tk.Label(
+            hero,
+            text="// INCOMING FIELD COMMAND //",
+            bg="#091419",
+            fg=COLORS["alert"],
+            font=("DejaVu Sans Mono", 9, "bold"),
+        ).pack(anchor="w")
+        tk.Frame(hero, bg=COLORS["alert"], height=4).pack(fill="x", pady=(11, 28))
+        tk.Label(
+            hero,
+            text="JOIN ACTIVE\nOPERATION",
+            justify="left",
+            bg="#091419",
+            fg="#f1eee6",
+            font=("DejaVu Sans Condensed", 38, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            hero,
+            text="LOBBY INTERCEPT  //  PH-41",
+            bg=COLORS["alert_dark"],
+            fg="#ffffff",
+            font=("DejaVu Sans Mono", 11, "bold"),
+            padx=14,
+            pady=7,
+        ).pack(anchor="w", pady=(18, 22))
+        tk.Label(
+            hero,
+            text=(
+                "Enter the six-character code transmitted by the host.\n\n"
+                "COUNTRY ASSIGNMENT // AUTOMATIC\n"
+                "Japan host  →  You command the United States\n"
+                "US host     →  You command Japan"
+            ),
+            justify="left",
+            bg="#091419",
+            fg="#aab8bd",
+            font=("DejaVu Sans Mono", 10),
+            wraplength=510,
+        ).pack(anchor="w")
+        diagnostic = tk.Frame(
+            hero,
+            bg="#131f24",
+            highlightbackground=COLORS["steel"],
+            highlightthickness=1,
+        )
+        diagnostic.pack(side="bottom", fill="x")
+        for label, value in (
+            ("ROLE", "GUEST COMMANDER"),
+            ("FACTION", "SERVER ASSIGNED"),
+            ("AUTH", "LOBBY CODE"),
+        ):
+            row = tk.Frame(diagnostic, bg="#131f24", padx=12, pady=5)
+            row.pack(fill="x")
+            tk.Label(
+                row,
+                text=label,
+                width=12,
+                anchor="w",
+                bg="#131f24",
+                fg=COLORS["muted"],
+                font=("DejaVu Sans Mono", 8),
+            ).pack(side="left")
+            tk.Label(
+                row,
+                text=value,
+                bg="#131f24",
+                fg=COLORS["cyan"],
+                font=("DejaVu Sans Mono", 8, "bold"),
+            ).pack(side="right")
+
+        card = tk.Frame(
+            layout,
+            bg=COLORS["panel"],
+            highlightbackground=COLORS["alert"],
+            highlightthickness=2,
+        )
+        card.grid(row=0, column=1, sticky="nsew")
+        inner = tk.Frame(card, bg=COLORS["panel"])
+        inner.pack(fill="both", expand=True, padx=24, pady=23)
+        tk.Label(
+            inner,
+            text="REMOTE COMMAND LINK",
+            bg=COLORS["panel"],
+            fg=COLORS["alert"],
+            font=("DejaVu Sans Mono", 9, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            inner,
+            text="ENTER LOBBY CODE",
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("DejaVu Sans Condensed", 25, "bold"),
+        ).pack(anchor="w", pady=(3, 14))
+        self.lobby_code_entry = self._labeled_entry(
+            inner, "OPERATION CODE", self.lobby_code
+        )
+        self.join_uri_entry = self._labeled_entry(
+            inner, "SERVER WEBSOCKET ADDRESS", self.server_uri
+        )
+        tk.Label(
+            inner,
+            text="NO COUNTRY SELECTION REQUIRED // OPPOSING FLEET ASSIGNED",
+            bg=COLORS["panel"],
+            fg=COLORS["gold"],
+            font=("DejaVu Sans Mono", 7, "bold"),
+            wraplength=380,
+            justify="left",
+        ).pack(anchor="w", pady=(12, 0))
+        self.join_button = self.make_button(
+            inner, "JOIN HOSTED LOBBY  →", self.join_lobby
+        )
+        self.join_button.pack(fill="x", pady=(20, 0))
+        self.command_button(
+            inner, "[ESC]", "RETURN TO OPERATION MENU", self.show_main_menu
+        ).pack(fill="x", pady=(7, 0))
+        self.lobby_code_entry.focus_set()
+        self.root.bind("<Return>", lambda _event: self.join_lobby())
+        self.root.bind("<Escape>", lambda _event: self.show_main_menu())
 
     def _labeled_entry(self, parent: tk.Widget, label: str, value: str, show: str = "") -> tk.Entry:
         tk.Label(parent, text=label, bg=COLORS["panel"], fg=COLORS["muted"], font=self.font_label).pack(anchor="w", pady=(13, 6))
@@ -742,26 +900,72 @@ class BattleshipGUI:
         entry.pack(fill="x", ipady=10)
         return entry
 
-    def connect_to_server(self) -> None:
+    def host_lobby(self) -> None:
         if self.worker and self.worker.is_alive():
             return
         preferred_team = self.team_choice.get()
         token = self.token_entry.get()
         uri = self.uri_entry.get().strip()
         if preferred_team not in TEAMS or not token or not uri:
-            messagebox.showwarning("Missing information", "Choose US or Japan and enter the game token and server address.")
+            messagebox.showwarning(
+                "Missing information",
+                "Choose US or Japan and enter the server host key and address.",
+            )
             return
         if not uri.startswith(("ws://", "wss://")):
             messagebox.showwarning("Invalid address", "The server address must begin with ws:// or wss://")
             return
         self.connect_button.configure(state="disabled", text="CONNECTING…")
         self.connection_label.configure(text="●  CONNECTING", fg=COLORS["yellow"])
+        self.connection_mode = "host"
+        self.server_uri = uri
+        self.host_key = token
+        self.lobby_code = ""
         self.player_name = ""
-        self.worker = NetworkWorker(uri, preferred_team, token, self.messages)
+        self.worker = NetworkWorker(
+            uri,
+            self.messages,
+            mode="host",
+            preferred_team=preferred_team,
+            token=token,
+        )
         self.worker.start()
         self.show_lobby(
-            "Establishing command link",
-            "Authenticating token and synchronizing with the operation server.",
+            "Creating operation lobby",
+            "Authenticating the host key and requesting a secure lobby code.",
+        )
+
+    def join_lobby(self) -> None:
+        if self.worker and self.worker.is_alive():
+            return
+        lobby_code = self.lobby_code_entry.get().strip().upper()
+        uri = self.join_uri_entry.get().strip()
+        if not lobby_code or not uri:
+            messagebox.showwarning(
+                "Missing information", "Enter the host's lobby code and server address."
+            )
+            return
+        if not uri.startswith(("ws://", "wss://")):
+            messagebox.showwarning(
+                "Invalid address", "The server address must begin with ws:// or wss://"
+            )
+            return
+        self.join_button.configure(state="disabled", text="CONNECTING…")
+        self.connection_label.configure(text="●  CONNECTING", fg=COLORS["yellow"])
+        self.connection_mode = "join"
+        self.server_uri = uri
+        self.lobby_code = lobby_code
+        self.player_name = ""
+        self.worker = NetworkWorker(
+            uri,
+            self.messages,
+            mode="join",
+            lobby_code=lobby_code,
+        )
+        self.worker.start()
+        self.show_lobby(
+            "Locating hosted operation",
+            f"Requesting entry to lobby {lobby_code} and synchronizing clocks.",
         )
 
     def loading_quote_panel(self, parent: tk.Widget) -> None:
@@ -872,7 +1076,7 @@ class BattleshipGUI:
             radar.create_oval(x - 3, y - 3, x + 3, y + 3, fill=COLORS["cyan"], outline="")
         tk.Label(
             radar_panel,
-            text="SCAN ACTIVE  //  LINK ENCRYPTED",
+            text="SCAN ACTIVE  //  LINK AUTHENTICATED",
             bg="#07161a",
             fg=COLORS["cyan"],
             font=("DejaVu Sans Mono", 8, "bold"),
@@ -908,6 +1112,37 @@ class BattleshipGUI:
             justify="left",
         )
         self.lobby_message.pack(anchor="w")
+        if self.lobby_code:
+            code_panel = tk.Frame(
+                briefing,
+                bg="#071821",
+                highlightbackground=COLORS["gold"],
+                highlightthickness=2,
+                padx=14,
+                pady=9,
+            )
+            code_panel.pack(anchor="w", fill="x", pady=(14, 0))
+            tk.Label(
+                code_panel,
+                text="LOBBY CODE",
+                bg="#071821",
+                fg=COLORS["muted"],
+                font=("DejaVu Sans Mono", 8, "bold"),
+            ).pack(side="left")
+            tk.Label(
+                code_panel,
+                text=self.lobby_code,
+                bg="#071821",
+                fg=COLORS["gold"],
+                font=("DejaVu Sans Mono", 19, "bold"),
+            ).pack(side="left", padx=18)
+            if self.connection_mode == "host":
+                self.make_button(
+                    code_panel,
+                    "COPY CODE",
+                    self.copy_lobby_code,
+                    primary=False,
+                ).pack(side="right")
         self.status_plate(briefing, "AWAITING COMMAND EVENT", active=True).pack(
             anchor="w", fill="x", pady=(16, 0)
         )
@@ -920,6 +1155,13 @@ class BattleshipGUI:
             fg=COLORS["muted"],
             font=self.font_mono,
         ).pack(anchor="w", pady=(10, 0))
+
+    def copy_lobby_code(self) -> None:
+        if not self.lobby_code:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.lobby_code)
+        self.root.update_idletasks()
 
     def show_placement(self) -> None:
         self.current_screen = "placement"
@@ -1486,12 +1728,13 @@ class BattleshipGUI:
             self.connection_label.configure(text="●  LINK ACTIVE", fg=COLORS["cyan"])
         elif message_type == "joined":
             self.player_name = str(message["team"])
+            self.lobby_code = str(message.get("lobby_code", self.lobby_code)).upper()
             automatic = message.get("assignment") == "automatic"
             self.assignment_note = (
-                f"You were automatically assigned {self.player_name}; "
-                "the opposing country was already claimed."
+                f"Lobby assignment confirmed: you command {self.player_name}, "
+                "the country opposing the host."
                 if automatic
-                else f"You claimed command of {self.player_name}."
+                else f"You host the operation as {self.player_name}."
             )
             self.fleet_spec = {
                 str(name): int(length) for name, length in message["fleet"].items()
@@ -1506,6 +1749,8 @@ class BattleshipGUI:
                 f"{self.assignment_note} Waiting for the opposing side.",
             )
         elif message_type in {"waiting", "opponent_left"}:
+            if message.get("lobby_code"):
+                self.lobby_code = str(message["lobby_code"]).upper()
             self.placements.clear()
             self.placement_allowed = False
             self.show_lobby("Waiting for opponent", str(message["message"]))
@@ -1539,11 +1784,19 @@ class BattleshipGUI:
             self.show_result(str(message["winner"]))
         elif message_type == "error":
             messagebox.showerror("Server message", str(message["message"]))
+        elif message_type == "lobby_closed":
+            self.connection_label.configure(text="●  LINK CLOSED", fg=COLORS["orange"])
+            messagebox.showwarning("Lobby closed", str(message["message"]))
+            self.connection_mode = ""
+            self.show_main_menu()
         elif message_type in {"network_error", "connection_closed"}:
             self.connection_label.configure(text="●  LINK CLOSED", fg=COLORS["orange"])
-            if self.current_screen != "result":
+            if self.current_screen != "result" and self.connection_mode:
                 messagebox.showerror("Connection problem", str(message["message"]))
-                self.show_connect()
+                if self.connection_mode == "host" and self.team_choice.get() in TEAMS:
+                    self.show_host_setup()
+                else:
+                    self.show_join_setup()
 
     def on_close(self) -> None:
         if self.worker:
