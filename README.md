@@ -117,7 +117,9 @@ python launch_host.py
 
 This starts the local server, waits for its health check, and opens the GUI directly at
 the Host Operation country dossiers. Closing the GUI also stops the server started by the
-launcher. Open only the guest in a second terminal:
+launcher. If a reused or newly started server disappears while the GUI is open, the
+launcher detects the failed health check and restarts it automatically. Open only the
+guest in a second terminal:
 
 ```bash
 cd "/path/to/Client-Server Application"

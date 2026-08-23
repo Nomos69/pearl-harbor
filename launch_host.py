@@ -49,6 +49,24 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=2)
 
 
+def start_server(args: argparse.Namespace) -> subprocess.Popen[bytes]:
+    print(f"Starting Pearl Harbor server on {args.listen_host}:{args.port} ...")
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(PROJECT_DIR / "server.py"),
+            "--host",
+            args.listen_host,
+            "--port",
+            str(args.port),
+        ],
+        cwd=PROJECT_DIR,
+    )
+    wait_for_server(process, args.port, args.startup_timeout)
+    print("Server ready.")
+    return process
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Start the Pearl Harbor server and host GUI with one command."
@@ -73,24 +91,10 @@ def main() -> int:
         if server_is_ready(args.port):
             print(f"Using the Pearl Harbor server already running on port {args.port}.")
         else:
-            print(
-                f"Starting Pearl Harbor server on {args.listen_host}:{args.port} ..."
-            )
-            server_process = subprocess.Popen(
-                [
-                    sys.executable,
-                    str(PROJECT_DIR / "server.py"),
-                    "--host",
-                    args.listen_host,
-                    "--port",
-                    str(args.port),
-                ],
-                cwd=PROJECT_DIR,
-            )
+            server_process = start_server(args)
             owns_server = True
-            wait_for_server(server_process, args.port, args.startup_timeout)
-            print("Server ready. Opening Host Operation ...")
 
+        print("Opening Host Operation ...")
         gui_process = subprocess.Popen(
             [
                 sys.executable,
@@ -101,7 +105,24 @@ def main() -> int:
             ],
             cwd=PROJECT_DIR,
         )
-        return gui_process.wait()
+        failed_health_checks = 0
+        while True:
+            return_code = gui_process.poll()
+            if return_code is not None:
+                return return_code
+
+            if server_is_ready(args.port):
+                failed_health_checks = 0
+            else:
+                failed_health_checks += 1
+                if failed_health_checks >= 2:
+                    print("Server connection lost. Restarting automatically ...")
+                    if server_process is not None:
+                        stop_process(server_process)
+                    server_process = start_server(args)
+                    owns_server = True
+                    failed_health_checks = 0
+            time.sleep(0.25)
     except KeyboardInterrupt:
         return 130
     except RuntimeError as exc:
