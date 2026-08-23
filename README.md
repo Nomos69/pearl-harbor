@@ -8,11 +8,11 @@ It does not use a browser, HTML, CSS, or JavaScript. An authoritative Python ser
 keeps both fleets private, validates turns, and exchanges JSON messages with each GUI
 over WebSockets.
 
-The main menu separates **Host Operation** from **Join Operation**. The host authenticates
-with the private server host key, chooses US or Japan, and receives a random six-character
-lobby code. The guest enters that shareable code without choosing a country; the server
-always assigns the country opposing the host. There can never be two US players or two
-Japan players.
+The main menu separates **Host Operation** from **Join Operation**. The host chooses US
+or Japan and creates a lobby immediately; the server returns a random six-character code.
+The guest enters that shareable code without choosing a country, and the server always
+assigns the country opposing the host. There can never be two US players or two Japan
+players.
 
 The GUI uses five distinct realistic top-down ship illustrations for the carrier,
 battleship, cruiser, submarine, and destroyer. Pillow scales and rotates the transparent
@@ -112,7 +112,6 @@ On the laptop, start the server in terminal 1:
 ```bash
 cd "/path/to/Client-Server Application"
 source .venv/bin/activate
-export BATTLESHIP_TOKEN='replace-with-a-long-random-value'
 python server.py
 ```
 
@@ -133,10 +132,10 @@ python gui_client.py
 ```
 
 Two native Pearl Harbor windows should appear. In the first window choose **Host
-Operation**, select US or Japan, and enter the server host key. Copy the generated lobby
-code. In the second window choose **Join Operation** and enter that code; no country or
-host key is requested. The server automatically assigns the opposing country. Each side
-receives its own historically named fleet. Place five ships, then click
+Operation**, select US or Japan, and create the lobby. Copy the generated lobby code. In
+the second window choose **Join Operation** and enter that code; no country selection is
+requested. The server automatically assigns the opposing country. Each side receives its
+own historically named fleet. Place five ships, then click
 **Lock deployment**. The side that connected first attacks first by
 clicking an unknown cell on the enemy grid. A hit earns another attack; the turn passes
 to the opponent only after a miss.
@@ -172,7 +171,6 @@ SSH into the Azure VM and run:
 ```bash
 cd "/path/to/Client-Server Application"
 source .venv/bin/activate
-export BATTLESHIP_TOKEN='a-long-private-host-key'
 python server.py
 ```
 
@@ -198,8 +196,8 @@ python gui_client.py \
   --uri ws://127.0.0.1:8765/ws
 ```
 
-In that window choose **Host Operation**, select the host country, and enter the private
-server host key. Copy the displayed six-character lobby code.
+In that window choose **Host Operation**, select the host country, create the lobby, and
+copy the displayed six-character code.
 
 On the Ubuntu laptop, open its own local GUI:
 
@@ -211,8 +209,7 @@ python gui_client.py \
 ```
 
 Choose **Join Operation**, enter the lobby code, and connect. The laptop guest is assigned
-the country opposing the Azure host. The lobby code is shareable; the server host key is
-not.
+the country opposing the Azure host.
 
 If the GUI cannot connect, check in this order: Azure server process, `ss`, UFW,
 Azure NSG source address, and the VM public IP.
@@ -231,14 +228,7 @@ sudo chown -R battleship:battleship /opt/battleship
 sudo cp deploy/battleship.service /etc/systemd/system/
 ```
 
-Generate and save the private server host key:
-
 ```bash
-GAME_TOKEN_INPUT="$(openssl rand -hex 32)"
-sudo install -m 600 -o root -g root /dev/null /etc/battleship.env
-printf 'BATTLESHIP_TOKEN=%s\n' "$GAME_TOKEN_INPUT" | sudo tee /etc/battleship.env >/dev/null
-printf 'Server host key (give only to the lobby host): %s\n' "$GAME_TOKEN_INPUT"
-unset GAME_TOKEN_INPUT
 sudo systemctl daemon-reload
 sudo systemctl enable --now battleship
 sudo systemctl status battleship --no-pager
@@ -264,8 +254,10 @@ or network delay from granting extra moves.
 ## 9. Security and optional TLS
 
 Plain `ws://` traffic is not encrypted. Use it only for a controlled class exercise
-with the Azure NSG limited to the laptop's public IP. For internet-wide access, use a
-DNS name and TLS:
+with the Azure NSG limited to the players' public IP addresses. Lobby hosting intentionally
+has no host key, so any client that can reach port `8765` can claim the server's single
+active lobby. For internet-wide access, add an authentication layer and use a DNS name
+with TLS:
 
 ```bash
 python server.py --certfile /path/to/fullchain.pem --keyfile /path/to/privkey.pem

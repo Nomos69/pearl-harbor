@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import time
 from typing import Any
 
@@ -93,12 +92,9 @@ async def synchronize_clock(websocket: Any) -> None:
 
 
 async def play(args: argparse.Namespace) -> None:
-    token = args.token or os.environ.get("BATTLESHIP_TOKEN", "")
     name = ""
     lobby_code = args.lobby_code.strip().upper() if args.lobby_code else ""
     if args.mode == "host":
-        if not token:
-            raise SystemExit("Hosting requires BATTLESHIP_TOKEN or --token.")
         name = args.team or await asyncio.to_thread(input, "Host team (US or Japan): ")
         if name not in TEAMS:
             raise SystemExit("Team must be exactly US or Japan.")
@@ -121,7 +117,6 @@ async def play(args: argparse.Namespace) -> None:
                         {
                             "type": "host_lobby",
                             "preferred_team": name.strip(),
-                            "token": token,
                         }
                     )
                 )
@@ -185,7 +180,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--uri", default="ws://127.0.0.1:8765")
     parser.add_argument("--mode", choices=("host", "join"), default="host")
     parser.add_argument("--team", choices=TEAMS)
-    parser.add_argument("--token")
+    parser.add_argument("--token", help=argparse.SUPPRESS)
     parser.add_argument("--lobby-code", default="")
     return parser.parse_args()
 

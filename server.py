@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from http import HTTPStatus
 import json
 import logging
-import os
 import secrets
 import ssl
 import time
@@ -35,8 +34,7 @@ class Player:
 
 
 class BattleshipServer:
-    def __init__(self, token: str) -> None:
-        self.token = token
+    def __init__(self) -> None:
         self.players: list[Player] = []
         self.phase = "waiting"
         self.turn: Player | None = None
@@ -99,14 +97,6 @@ class BattleshipServer:
         preferred_team = str(message.get("preferred_team", "")).strip()
 
         if message_type == "host_lobby":
-            supplied_token = str(message.get("token", ""))
-            if not secrets.compare_digest(supplied_token, self.token):
-                await self.reject_entry(
-                    connection,
-                    "Invalid server host key.",
-                    "invalid host key",
-                )
-                return None
             if preferred_team not in TEAMS:
                 await self.reject_entry(
                     connection,
@@ -450,18 +440,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pearl Harbor WebSocket server")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", default=8765, type=int)
-    parser.add_argument("--token", default=os.environ.get("BATTLESHIP_TOKEN"))
+    parser.add_argument("--token", help=argparse.SUPPRESS)
     parser.add_argument("--certfile", help="TLS certificate chain for wss://")
     parser.add_argument("--keyfile", help="TLS private key for wss://")
     return parser.parse_args()
 
 
 async def run(args: argparse.Namespace) -> None:
-    if not args.token:
-        raise SystemExit(
-            "Set BATTLESHIP_TOKEN or pass --token. "
-            "Refusing to start without a private host key."
-        )
     if bool(args.certfile) != bool(args.keyfile):
         raise SystemExit("Provide both --certfile and --keyfile, or neither.")
     ssl_context = None
@@ -469,7 +454,7 @@ async def run(args: argparse.Namespace) -> None:
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(args.certfile, args.keyfile)
 
-    application = BattleshipServer(args.token)
+    application = BattleshipServer()
     protocol = "wss" if ssl_context else "ws"
     LOGGER.info("Listening on %s://%s:%d", protocol, args.host, args.port)
     async with serve(

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import queue
 from typing import Any, Callable
 
@@ -73,7 +72,6 @@ class BattleshipGUI:
         self.connection_mode = ""
         self.lobby_code = ""
         self.server_uri = args.uri
-        self.host_key = args.token or os.environ.get("BATTLESHIP_TOKEN", "")
         self.offset_text = "—"
         self.round_trip_text = "—"
         self.current_screen = ""
@@ -651,7 +649,7 @@ class BattleshipGUI:
             text=(
                 "HOST  //  Selects the first national command\n"
                 "GUEST //  Receives the opposing command\n\n"
-                "Create a coded lobby on the operation server.\n"
+                "Create a lobby directly on the operation server.\n"
                 "Share only the lobby code with your opponent."
             ),
             justify="left",
@@ -664,7 +662,7 @@ class BattleshipGUI:
         for label, value in (
             ("NETWORK", "WEBSOCKET"),
             ("THEATER", "OAHU"),
-            ("HOST ACCESS", "PRIVATE KEY"),
+            ("HOST ACCESS", "DIRECT"),
         ):
             row = tk.Frame(diagnostic, bg="#131f24", padx=12, pady=5)
             row.pack(fill="x")
@@ -721,21 +719,18 @@ class BattleshipGUI:
             cursor="hand2",
             font=("DejaVu Sans Mono", 7, "bold"),
         ).pack(side="right")
-        self.token_entry = self._labeled_entry(
-            inner, "SERVER HOST KEY", self.host_key, show="•"
-        )
         self.uri_entry = self._labeled_entry(
             inner, "SERVER WEBSOCKET ADDRESS", self.server_uri
         )
         tk.Label(
             inner,
-            text="SERVER GENERATES A SHAREABLE 6-CHARACTER LOBBY CODE.",
+            text="NO HOST KEY REQUIRED // SERVER GENERATES A 6-CHARACTER CODE.",
             bg=COLORS["panel"],
             fg=COLORS["gold"],
             font=("DejaVu Sans Mono", 8),
         ).pack(anchor="w", pady=(8, 0))
         self.connect_button = self.make_button(
-            inner, "CREATE SECURE LOBBY  →", self.host_lobby
+            inner, "CREATE LOBBY  →", self.host_lobby
         )
         self.connect_button.configure(
             bg=COLORS["alert"],
@@ -916,12 +911,11 @@ class BattleshipGUI:
         if self.worker and self.worker.is_alive():
             return
         preferred_team = self.team_choice.get()
-        token = self.token_entry.get()
         uri = self.uri_entry.get().strip()
-        if preferred_team not in TEAMS or not token or not uri:
+        if preferred_team not in TEAMS or not uri:
             messagebox.showwarning(
                 "Missing information",
-                "Choose US or Japan and enter the server host key and address.",
+                "Choose US or Japan and enter the server address.",
             )
             return
         if not uri.startswith(("ws://", "wss://")):
@@ -931,7 +925,6 @@ class BattleshipGUI:
         self.connection_label.configure(text="●  CONNECTING", fg=COLORS["yellow"])
         self.connection_mode = "host"
         self.server_uri = uri
-        self.host_key = token
         self.lobby_code = ""
         self.player_name = ""
         self.worker = NetworkWorker(
@@ -939,12 +932,11 @@ class BattleshipGUI:
             self.messages,
             mode="host",
             preferred_team=preferred_team,
-            token=token,
         )
         self.worker.start()
         self.show_lobby(
             "Creating operation lobby",
-            "Authenticating the host key and requesting a secure lobby code.",
+            "Contacting the operation server and requesting a new lobby code.",
         )
 
     def join_lobby(self) -> None:
@@ -1933,7 +1925,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pearl Harbor")
     parser.add_argument("--uri", default="ws://127.0.0.1:8765/ws")
     parser.add_argument("--team", choices=TEAMS)
-    parser.add_argument("--token")
+    parser.add_argument("--token", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 

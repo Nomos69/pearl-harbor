@@ -24,7 +24,6 @@ class NetworkWorker(threading.Thread):
         *,
         mode: str,
         preferred_team: str = "",
-        token: str = "",
         lobby_code: str = "",
     ) -> None:
         super().__init__(daemon=True)
@@ -33,7 +32,6 @@ class NetworkWorker(threading.Thread):
         self.uri = uri
         self.mode = mode
         self.preferred_team = preferred_team
-        self.token = token
         self.lobby_code = lobby_code.strip().upper()
         self.incoming = incoming
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -103,7 +101,6 @@ class NetworkWorker(threading.Thread):
                     entry_message = {
                         "type": "host_lobby",
                         "preferred_team": self.preferred_team,
-                        "token": self.token,
                     }
                 else:
                     entry_message = {

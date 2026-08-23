@@ -33,7 +33,7 @@ async def http_get(port, path):
 
 @pytest.mark.asyncio
 async def test_server_health_endpoint():
-    application = BattleshipServer("test-token")
+    application = BattleshipServer()
     async with serve(
         application.handler, "127.0.0.1", 0, process_request=health_check
     ) as websocket_server:
@@ -45,7 +45,7 @@ async def test_server_health_endpoint():
 
 @pytest.mark.asyncio
 async def test_two_clients_can_join_place_and_attack():
-    application = BattleshipServer("test-token")
+    application = BattleshipServer()
     async with serve(
         application.handler, "127.0.0.1", 0, process_request=health_check
     ) as websocket_server:
@@ -63,7 +63,6 @@ async def test_two_clients_can_join_place_and_attack():
                     {
                         "type": "host_lobby",
                         "preferred_team": "US",
-                        "token": "test-token",
                     }
                 )
             )
@@ -122,7 +121,7 @@ async def test_two_clients_can_join_place_and_attack():
 
 @pytest.mark.asyncio
 async def test_first_player_can_choose_japan_and_second_is_assigned_us():
-    application = BattleshipServer("test-token")
+    application = BattleshipServer()
     async with serve(
         application.handler, "127.0.0.1", 0, process_request=health_check
     ) as websocket_server:
@@ -136,7 +135,6 @@ async def test_first_player_can_choose_japan_and_second_is_assigned_us():
                     {
                         "type": "host_lobby",
                         "preferred_team": "Japan",
-                        "token": "test-token",
                     }
                 )
             )
@@ -161,7 +159,7 @@ async def test_first_player_can_choose_japan_and_second_is_assigned_us():
 
 @pytest.mark.asyncio
 async def test_join_rejects_an_unknown_lobby_code():
-    application = BattleshipServer("host-key")
+    application = BattleshipServer()
     async with serve(
         application.handler, "127.0.0.1", 0, process_request=health_check
     ) as websocket_server:
@@ -175,7 +173,6 @@ async def test_join_rejects_an_unknown_lobby_code():
                     {
                         "type": "host_lobby",
                         "preferred_team": "US",
-                        "token": "host-key",
                     }
                 )
             )
@@ -190,7 +187,7 @@ async def test_join_rejects_an_unknown_lobby_code():
 
 @pytest.mark.asyncio
 async def test_host_disconnect_closes_lobby_and_allows_a_new_host():
-    application = BattleshipServer("host-key")
+    application = BattleshipServer()
     async with serve(
         application.handler, "127.0.0.1", 0, process_request=health_check
     ) as websocket_server:
@@ -204,7 +201,6 @@ async def test_host_disconnect_closes_lobby_and_allows_a_new_host():
                     {
                         "type": "host_lobby",
                         "preferred_team": "Japan",
-                        "token": "host-key",
                     }
                 )
             )
@@ -229,7 +225,6 @@ async def test_host_disconnect_closes_lobby_and_allows_a_new_host():
                     {
                         "type": "host_lobby",
                         "preferred_team": "US",
-                        "token": "host-key",
                     }
                 )
             )
@@ -240,7 +235,7 @@ async def test_host_disconnect_closes_lobby_and_allows_a_new_host():
 
 @pytest.mark.asyncio
 async def test_finished_players_can_leave_result_screen_independently():
-    application = BattleshipServer("host-key")
+    application = BattleshipServer()
     async with serve(
         application.handler, "127.0.0.1", 0, process_request=health_check
     ) as websocket_server:
@@ -254,7 +249,6 @@ async def test_finished_players_can_leave_result_screen_independently():
                     {
                         "type": "host_lobby",
                         "preferred_team": "US",
-                        "token": "host-key",
                     }
                 )
             )
@@ -289,7 +283,7 @@ async def test_finished_players_can_leave_result_screen_independently():
 
 @pytest.mark.asyncio
 async def test_native_client_network_worker_connects_and_synchronizes():
-    application = BattleshipServer("desktop-token")
+    application = BattleshipServer()
     async with serve(
         application.handler, "127.0.0.1", 0, process_request=health_check
     ) as websocket_server:
@@ -300,7 +294,6 @@ async def test_native_client_network_worker_connects_and_synchronizes():
             incoming,
             mode="host",
             preferred_team="US",
-            token="desktop-token",
         )
         worker.start()
 
