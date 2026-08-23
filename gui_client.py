@@ -1925,6 +1925,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pearl Harbor")
     parser.add_argument("--uri", default="ws://127.0.0.1:8765/ws")
     parser.add_argument("--team", choices=TEAMS)
+    parser.add_argument(
+        "--host",
+        action="store_true",
+        help="Open directly in the Host Operation country-selection flow.",
+    )
     parser.add_argument("--token", help=argparse.SUPPRESS)
     return parser.parse_args()
 
@@ -1932,7 +1937,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     root = tk.Tk()
-    BattleshipGUI(root, args)
+    application = BattleshipGUI(root, args)
+    if args.host:
+        root.after_idle(application.show_briefing)
     root.mainloop()
 
 

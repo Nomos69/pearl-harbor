@@ -107,6 +107,26 @@ It should print `17.0`.
 
 ## 3. Test the native GUI locally
 
+The fastest host setup is one command:
+
+```bash
+cd "/path/to/Client-Server Application"
+source .venv/bin/activate
+python launch_host.py
+```
+
+This starts the local server, waits for its health check, and opens the GUI directly at
+the Host Operation country dossiers. Closing the GUI also stops the server started by the
+launcher. Open only the guest in a second terminal:
+
+```bash
+cd "/path/to/Client-Server Application"
+source .venv/bin/activate
+python gui_client.py --uri ws://127.0.0.1:8765/ws
+```
+
+The equivalent manual three-terminal process is shown below.
+
 On the laptop, start the server in terminal 1:
 
 ```bash
@@ -194,6 +214,13 @@ cd ~/pearl-harbor
 source .venv/bin/activate
 python gui_client.py \
   --uri ws://127.0.0.1:8765/ws
+```
+
+Instead of starting the Azure server and host GUI separately, the X11-forwarded Azure
+session can launch both with:
+
+```bash
+python launch_host.py --listen-host 0.0.0.0
 ```
 
 In that window choose **Host Operation**, select the host country, create the lobby, and
