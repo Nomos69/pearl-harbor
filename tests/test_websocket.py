@@ -239,6 +239,55 @@ async def test_host_disconnect_closes_lobby_and_allows_a_new_host():
 
 
 @pytest.mark.asyncio
+async def test_finished_players_can_leave_result_screen_independently():
+    application = BattleshipServer("host-key")
+    async with serve(
+        application.handler, "127.0.0.1", 0, process_request=health_check
+    ) as websocket_server:
+        port = websocket_server.sockets[0].getsockname()[1]
+        uri = f"ws://127.0.0.1:{port}/ws"
+        async with connect(uri) as host, connect(uri) as guest:
+            await host.recv()
+            await guest.recv()
+            await host.send(
+                json.dumps(
+                    {
+                        "type": "host_lobby",
+                        "preferred_team": "US",
+                        "token": "host-key",
+                    }
+                )
+            )
+            hosted = await receive_type(host, "joined")
+            await guest.send(
+                json.dumps(
+                    {
+                        "type": "join_lobby",
+                        "lobby_code": hosted["lobby_code"],
+                    }
+                )
+            )
+            await receive_type(guest, "joined")
+            application.phase = "finished"
+
+            await host.close()
+            await asyncio.sleep(0.05)
+            pong = await guest.ping()
+            await asyncio.wait_for(pong, timeout=1)
+            assert len(application.players) == 1
+            assert application.lobby_code == hosted["lobby_code"]
+
+            await guest.close()
+            for _ in range(20):
+                if not application.players:
+                    break
+                await asyncio.sleep(0.01)
+            assert application.players == []
+            assert application.lobby_code is None
+            assert application.phase == "waiting"
+
+
+@pytest.mark.asyncio
 async def test_native_client_network_worker_connects_and_synchronizes():
     application = BattleshipServer("desktop-token")
     async with serve(

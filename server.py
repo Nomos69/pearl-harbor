@@ -133,7 +133,7 @@ class BattleshipServer:
 
         async with self.lock:
             if message_type == "host_lobby":
-                if self.host is not None:
+                if self.host is not None or self.players or self.lobby_code is not None:
                     await self.reject_entry(
                         connection,
                         "This operation server already has an active lobby.",
@@ -314,22 +314,34 @@ class BattleshipServer:
     async def disconnect(self, player: Player) -> None:
         remaining_players: list[Player] = []
         host_departed = False
+        finished_departure = False
         async with self.lock:
             if player not in self.players:
                 return
+            finished_departure = self.phase == "finished"
             self.players.remove(player)
             host_departed = player is self.host
             remaining_players = list(self.players)
-            if host_departed:
-                self.players.clear()
-                self.host = None
-                self.lobby_code = None
+            if finished_departure:
+                if host_departed:
+                    self.host = None
+                if not self.players:
+                    self.lobby_code = None
+                    self.phase = "waiting"
+                self.turn = None
             else:
-                for remaining in self.players:
-                    remaining.board = None
-            self.phase = "waiting"
-            self.turn = None
+                if host_departed:
+                    self.players.clear()
+                    self.host = None
+                    self.lobby_code = None
+                else:
+                    for remaining in self.players:
+                        remaining.board = None
+                self.phase = "waiting"
+                self.turn = None
         LOGGER.info("%s disconnected", player.name)
+        if finished_departure:
+            return
         if host_departed:
             for remaining in remaining_players:
                 await self.send(

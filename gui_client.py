@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import queue
 from typing import Any, Callable
@@ -80,6 +81,11 @@ class BattleshipGUI:
         self.quote_after_id: str | None = None
         self.quote_text_label: tk.Label | None = None
         self.quote_source_label: tk.Label | None = None
+        self.radar_after_id: str | None = None
+        self.radar_canvas: tk.Canvas | None = None
+        self.radar_status_label: tk.Label | None = None
+        self.radar_contacts: list[tuple[int, int, int, float]] = []
+        self.radar_sweep_degrees = 35.0
 
         self.root.title("Pearl Harbor")
         self.root.geometry("1180x780")
@@ -135,8 +141,14 @@ class BattleshipGUI:
         if self.quote_after_id is not None:
             self.root.after_cancel(self.quote_after_id)
             self.quote_after_id = None
+        if self.radar_after_id is not None:
+            self.root.after_cancel(self.radar_after_id)
+            self.radar_after_id = None
         self.quote_text_label = None
         self.quote_source_label = None
+        self.radar_canvas = None
+        self.radar_status_label = None
+        self.radar_contacts = []
         for sequence in ("<Return>", "<Escape>", "1", "2", "3", "4"):
             self.root.unbind(sequence)
         for child in self.body.winfo_children():
@@ -1071,16 +1083,28 @@ class BattleshipGUI:
             )
         radar.create_line(110, 8, 110, 212, fill=COLORS["steel"])
         radar.create_line(8, 110, 212, 110, fill=COLORS["steel"])
-        radar.create_line(110, 110, 185, 45, fill=COLORS["alert"], width=3)
+        self.radar_canvas = radar
+        self.radar_contacts = []
         for x, y in ((175, 51), (74, 82), (151, 158)):
-            radar.create_oval(x - 3, y - 3, x + 3, y + 3, fill=COLORS["cyan"], outline="")
-        tk.Label(
+            angle = math.degrees(math.atan2(110 - y, x - 110)) % 360
+            contact = radar.create_oval(
+                x - 3,
+                y - 3,
+                x + 3,
+                y + 3,
+                fill=COLORS["cyan_dark"],
+                outline=COLORS["cyan"],
+            )
+            self.radar_contacts.append((contact, x, y, angle))
+        self.radar_status_label = tk.Label(
             radar_panel,
-            text="SCAN ACTIVE  //  LINK AUTHENTICATED",
+            text="SCAN 000°  //  INITIALIZING",
             bg="#07161a",
             fg=COLORS["cyan"],
             font=("DejaVu Sans Mono", 8, "bold"),
-        ).pack()
+        )
+        self.radar_status_label.pack()
+        self.animate_lobby_radar()
 
         briefing = tk.Frame(layout, bg=COLORS["panel"])
         briefing.pack(side="left", fill="both", expand=True, pady=10)
@@ -1155,6 +1179,79 @@ class BattleshipGUI:
             fg=COLORS["muted"],
             font=self.font_mono,
         ).pack(anchor="w", pady=(10, 0))
+
+    def animate_lobby_radar(self) -> None:
+        radar = self.radar_canvas
+        if (
+            self.current_screen != "lobby"
+            or radar is None
+            or not radar.winfo_exists()
+        ):
+            self.radar_after_id = None
+            return
+
+        radar.delete("sweep")
+        center = 110
+        radius = 101
+        trail_colors = (
+            COLORS["cyan"],
+            "#3bb9b7",
+            "#2a8587",
+            "#205e64",
+            "#173f48",
+            "#102b34",
+        )
+        for trail, color in reversed(tuple(enumerate(trail_colors))):
+            angle = math.radians(self.radar_sweep_degrees - trail * 4)
+            end_x = center + radius * math.cos(angle)
+            end_y = center - radius * math.sin(angle)
+            radar.create_line(
+                center,
+                center,
+                end_x,
+                end_y,
+                fill=color,
+                width=3 if trail == 0 else 2,
+                tags="sweep",
+            )
+        radar.create_oval(
+            center - 4,
+            center - 4,
+            center + 4,
+            center + 4,
+            fill=COLORS["alert"],
+            outline=COLORS["gold"],
+            tags="sweep",
+        )
+
+        for contact, x, y, contact_angle in self.radar_contacts:
+            separation = abs(
+                (self.radar_sweep_degrees - contact_angle + 180) % 360 - 180
+            )
+            illuminated = separation < 13
+            size = 6 if illuminated else 3
+            radar.coords(contact, x - size, y - size, x + size, y + size)
+            radar.itemconfigure(
+                contact,
+                fill=COLORS["gold"] if illuminated else COLORS["cyan_dark"],
+                outline=COLORS["orange"] if illuminated else COLORS["cyan"],
+                width=2 if illuminated else 1,
+            )
+            radar.tag_raise(contact)
+
+        if self.radar_status_label is not None:
+            operation = (
+                "BROADCASTING LOBBY"
+                if self.connection_mode == "host"
+                else "SEARCHING FOR HOST"
+                if self.connection_mode == "join"
+                else "TACTICAL SCAN"
+            )
+            self.radar_status_label.configure(
+                text=f"SCAN {int(self.radar_sweep_degrees):03d}°  //  {operation}"
+            )
+        self.radar_sweep_degrees = (self.radar_sweep_degrees + 3.5) % 360
+        self.radar_after_id = self.root.after(50, self.animate_lobby_radar)
 
     def copy_lobby_code(self) -> None:
         if not self.lobby_code:
@@ -1707,10 +1804,38 @@ class BattleshipGUI:
         ).pack(anchor="w")
         self.command_button(
             debrief,
-            "[X]",
-            "EXIT TO DESKTOP",
-            self.on_close,
+            "[↵]",
+            "ACKNOWLEDGE REPORT // MAIN MENU",
+            self.return_to_main_menu,
         ).pack(fill="x", side="bottom")
+        self.root.bind("<Return>", lambda _event: self.return_to_main_menu())
+        self.root.bind("<Escape>", lambda _event: self.return_to_main_menu())
+
+    def return_to_main_menu(self) -> None:
+        self.connection_mode = ""
+        if self.worker:
+            self.worker.close()
+        self.worker = None
+
+        # Detach from any late messages emitted while the old socket is closing.
+        self.messages = queue.Queue()
+        self.player_name = ""
+        self.fleet_spec.clear()
+        self.fleet_assets.clear()
+        self.placements.clear()
+        self.selected_ship = ""
+        self.team_choice.set(self.args.team or "")
+        self.orientation.set("horizontal")
+        self.placement_allowed = False
+        self.can_attack = False
+        self.latest_state = None
+        self.latest_event = "Awaiting first strike."
+        self.assignment_note = ""
+        self.lobby_code = ""
+        self.offset_text = "—"
+        self.round_trip_text = "—"
+        self.connection_label.configure(text="●  OFFLINE", fg=COLORS["muted"])
+        self.show_main_menu()
 
     def poll_messages(self) -> None:
         try:

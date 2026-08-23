@@ -23,8 +23,11 @@ desktop controls. The same red-and-steel command-console design continues throug
 radar lobby, fleet deployment, dual battlefield, live intelligence bar, and cinematic
 victory or defeat debriefing screens. Native Pillow-rendered US and Japan flags appear
 on the country command cards and follow the server-assigned side through every phase.
-Waiting and synchronization screens rotate archive-verified quotations from historical
-military and political figures every three seconds.
+The lobby radar continuously sweeps, illuminates contacts, and reports whether it is
+broadcasting a hosted lobby or searching for one. Waiting and synchronization screens
+rotate archive-verified quotations from historical military and political figures every
+three seconds. After victory or defeat, each player acknowledges the final report and
+returns independently to a clean main menu.
 
 Quotation references: [FDR's Pearl Harbor address](https://www.archives.gov/milestone-documents/joint-address-to-congress-declaration-of-war-against-japan),
 [Eisenhower's D-Day order](https://www.archives.gov/milestone-documents/general-eisenhowers-order-of-the-day),
