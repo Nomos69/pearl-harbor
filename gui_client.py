@@ -77,6 +77,10 @@ class BattleshipGUI:
         self.placements: dict[str, dict[str, Any]] = {}
         self.selected_ship = ""
         self.team_choice = tk.StringVar(value=args.team or "")
+        self.host_server_mode = tk.StringVar(
+            value="remote" if getattr(args, "remote_host", False) else "local"
+        )
+        self.displayed_host_server_mode = self.host_server_mode.get()
         self.orientation = tk.StringVar(value="horizontal")
         self.placement_allowed = False
         self.can_attack = False
@@ -86,6 +90,7 @@ class BattleshipGUI:
         self.connection_mode = ""
         self.lobby_code = ""
         self.server_uri = args.uri
+        self.remote_server_uri = args.uri
         parsed_uri = urlparse(args.uri)
         self.host_port = parsed_uri.port or 8765
         self.offset_text = "—"
@@ -759,20 +764,60 @@ class BattleshipGUI:
             cursor="hand2",
             font=("DejaVu Sans Mono", 7, "bold"),
         ).pack(side="right")
-        self.host_port_entry = self._labeled_entry(
-            inner, "LOCAL SERVER PORT", str(self.host_port)
-        )
         tk.Label(
             inner,
-            text=(
-                "THIS MACHINE BECOMES SERVER + PLAYER // NO HOST KEY REQUIRED\n"
-                "SERVER GENERATES A SHAREABLE 6-CHARACTER CODE."
-            ),
+            text="SERVER LOCATION",
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=self.font_label,
+        ).pack(anchor="w", pady=(11, 6))
+        server_modes = tk.Frame(inner, bg=COLORS["panel"])
+        server_modes.pack(fill="x")
+        for text, value in (
+            ("THIS MACHINE", "local"),
+            ("REMOTE AZURE", "remote"),
+        ):
+            tk.Radiobutton(
+                server_modes,
+                text=text,
+                value=value,
+                variable=self.host_server_mode,
+                command=lambda mode=value: self.select_host_server_mode(mode),
+                indicatoron=False,
+                bg="#17242b",
+                selectcolor=COLORS["alert_dark"],
+                fg=COLORS["text"],
+                activebackground=COLORS["alert_dark"],
+                activeforeground="#ffffff",
+                relief="flat",
+                bd=0,
+                padx=10,
+                pady=8,
+                font=("DejaVu Sans Mono", 8, "bold"),
+            ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        target_value = (
+            self.remote_server_uri
+            if self.host_server_mode.get() == "remote"
+            else str(self.host_port)
+        )
+        target_label = (
+            "REMOTE SERVER WEBSOCKET ADDRESS"
+            if self.host_server_mode.get() == "remote"
+            else "LOCAL SERVER PORT"
+        )
+        self.host_target_entry = self._labeled_entry(
+            inner, target_label, target_value
+        )
+        self.host_mode_note = tk.Label(
+            inner,
+            text="",
             bg=COLORS["panel"],
             fg=COLORS["gold"],
             font=("DejaVu Sans Mono", 7, "bold"),
             justify="left",
-        ).pack(anchor="w", pady=(8, 0))
+        )
+        self.host_mode_note.pack(anchor="w", pady=(8, 0))
+        self.refresh_host_server_controls()
         self.connect_button = self.make_button(
             inner, "CREATE LOBBY  →", self.host_lobby
         )
@@ -934,7 +979,8 @@ class BattleshipGUI:
         self.root.bind("<Escape>", lambda _event: self.show_main_menu())
 
     def _labeled_entry(self, parent: tk.Widget, label: str, value: str, show: str = "") -> tk.Entry:
-        tk.Label(parent, text=label, bg=COLORS["panel"], fg=COLORS["muted"], font=self.font_label).pack(anchor="w", pady=(13, 6))
+        field_label = tk.Label(parent, text=label, bg=COLORS["panel"], fg=COLORS["muted"], font=self.font_label)
+        field_label.pack(anchor="w", pady=(13, 6))
         entry = tk.Entry(
             parent,
             bg="#071821",
@@ -949,19 +995,78 @@ class BattleshipGUI:
         )
         entry.insert(0, value)
         entry.pack(fill="x", ipady=10)
+        entry.field_label = field_label
         return entry
+
+    def select_host_server_mode(self, mode: str) -> None:
+        current_value = self.host_target_entry.get().strip()
+        if self.displayed_host_server_mode == "remote":
+            self.remote_server_uri = current_value
+        elif current_value.isdigit():
+            self.host_port = int(current_value)
+        self.host_server_mode.set(mode)
+        self.displayed_host_server_mode = mode
+        replacement = (
+            self.remote_server_uri if mode == "remote" else str(self.host_port)
+        )
+        self.host_target_entry.delete(0, "end")
+        self.host_target_entry.insert(0, replacement)
+        self.refresh_host_server_controls()
+
+    def refresh_host_server_controls(self) -> None:
+        remote = self.host_server_mode.get() == "remote"
+        self.host_target_entry.field_label.configure(
+            text=(
+                "REMOTE SERVER WEBSOCKET ADDRESS"
+                if remote
+                else "LOCAL SERVER PORT"
+            )
+        )
+        self.host_mode_note.configure(
+            text=(
+                "AZURE RUNS SERVER // THIS GUI STAYS FAST ON YOUR LAPTOP\n"
+                "NO HOST KEY // SERVER GENERATES THE 6-CHARACTER CODE."
+                if remote
+                else "THIS MACHINE BECOMES SERVER + PLAYER // NO HOST KEY\n"
+                "SERVER GENERATES THE 6-CHARACTER CODE."
+            )
+        )
 
     def host_lobby(self) -> None:
         if self.worker and self.worker.is_alive():
             return
         preferred_team = self.team_choice.get()
-        port_text = self.host_port_entry.get().strip()
-        if preferred_team not in TEAMS or not port_text:
+        target = self.host_target_entry.get().strip()
+        if preferred_team not in TEAMS or not target:
             messagebox.showwarning(
                 "Missing information",
-                "Choose US or Japan and enter a local server port.",
+                "Choose US or Japan and enter the server connection information.",
             )
             return
+        if self.host_server_mode.get() == "remote":
+            if not target.startswith(("ws://", "wss://")):
+                messagebox.showwarning(
+                    "Invalid address",
+                    "The remote server address must begin with ws:// or wss://",
+                )
+                return
+            self.remote_server_uri = target
+            self.server_uri = target
+            self.connection_mode = "host"
+            self.lobby_code = ""
+            self.player_name = ""
+            self.connect_button.configure(state="disabled", text="CONTACTING AZURE…")
+            self.connection_label.configure(
+                text="●  CONNECTING TO AZURE", fg=COLORS["yellow"]
+            )
+            self.start_host_worker(target, preferred_team)
+            self.show_lobby(
+                "Creating remote operation lobby",
+                "Contacting the authoritative Azure server and requesting a lobby code.",
+            )
+            return
+
+        port_text = target
         try:
             port = int(port_text)
         except ValueError:
@@ -988,6 +1093,15 @@ class BattleshipGUI:
             args=(port, preferred_team),
             daemon=True,
         ).start()
+
+    def start_host_worker(self, uri: str, preferred_team: str) -> None:
+        self.worker = NetworkWorker(
+            uri,
+            self.messages,
+            mode="host",
+            preferred_team=preferred_team,
+        )
+        self.worker.start()
 
     def _prepare_host_server(self, port: int, preferred_team: str) -> None:
         process: subprocess.Popen[bytes] | None = None
@@ -2090,13 +2204,7 @@ class BattleshipGUI:
             self.connection_label.configure(
                 text="●  SERVER ONLINE", fg=COLORS["yellow"]
             )
-            self.worker = NetworkWorker(
-                self.server_uri,
-                self.messages,
-                mode="host",
-                preferred_team=preferred_team,
-            )
-            self.worker.start()
+            self.start_host_worker(self.server_uri, preferred_team)
             source = (
                 "Using the operation server already active on this machine."
                 if message.get("reused_server")
@@ -2204,6 +2312,11 @@ def parse_args() -> argparse.Namespace:
         "--host",
         action="store_true",
         help="Open directly in the Host Operation country-selection flow.",
+    )
+    parser.add_argument(
+        "--remote-host",
+        action="store_true",
+        help="Preselect Remote Azure when opening Host Operation.",
     )
     parser.add_argument(
         "--low-bandwidth",

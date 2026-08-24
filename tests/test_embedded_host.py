@@ -74,3 +74,30 @@ def test_host_mode_reports_server_start_failure(monkeypatch):
         "type": "local_server_error",
         "message": "port unavailable",
     }
+
+
+def test_remote_host_starts_only_a_client_worker(monkeypatch):
+    application = bare_application()
+    created_workers = []
+
+    class FakeWorker:
+        def __init__(self, uri, incoming, **options):
+            self.uri = uri
+            self.incoming = incoming
+            self.options = options
+            self.started = False
+            created_workers.append(self)
+
+        def start(self):
+            self.started = True
+
+    monkeypatch.setattr(gui_client, "NetworkWorker", FakeWorker)
+
+    application.start_host_worker("ws://20.205.228.58:8765/ws", "Japan")
+
+    assert len(created_workers) == 1
+    worker = created_workers[0]
+    assert worker.uri == "ws://20.205.228.58:8765/ws"
+    assert worker.options == {"mode": "host", "preferred_team": "Japan"}
+    assert worker.started is True
+    assert not hasattr(application, "server_process")

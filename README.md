@@ -9,12 +9,12 @@ keeps both fleets private, validates turns, and exchanges JSON messages with eac
 over WebSockets.
 
 Every installation can perform either network role. The main menu separates **Host
-Operation** from **Join Operation**. Choosing Host makes that machine the authoritative
-server and a player at the same time; its GUI connects locally to the server it started.
-The host chooses US or Japan and receives a random six-character lobby code. Choosing
-Join starts no server: that machine connects as a client, enters the code, and is always
-assigned the country opposing the host. There can never be two US players or two Japan
-players.
+Operation** from **Join Operation**. Host Operation offers two server locations: **This
+Machine** starts an embedded server, while **Remote Azure** connects the host player to
+an already-running authoritative Azure server. The host chooses US or Japan and receives
+a random six-character lobby code. Choosing Join starts no server: that machine connects
+as a client, enters the code, and is always assigned the country opposing the host. There
+can never be two US players or two Japan players.
 
 The GUI uses five distinct realistic top-down ship illustrations for the carrier,
 battleship, cruiser, submarine, and destroyer. Pillow scales and rotates the transparent
@@ -56,11 +56,14 @@ Historical references: [U.S. Naval History and Heritage Command attack overview]
 [Prime Minister's Office of Japan](https://japan.kantei.go.jp/past_cabinet/index.html).
 
 ```text
-Azure Ubuntu VM (Host): authoritative server + host player GUI
-                                      |
-                         TCP 8765 / WebSocket
-                                      |
-Ubuntu laptop (Join): guest player GUI/client only
+                         Azure Ubuntu VM
+                      authoritative server only
+                               TCP 8765
+                                  |
+                    +-------------+-------------+
+                    |                           |
+        Local host-player GUI         Guest-player GUI
+        creates the lobby              joins with its code
 ```
 
 Follow these sections in order. Complete each check before moving to the next one.
@@ -80,11 +83,11 @@ chronyc tracking
 Check that `System clock synchronized: yes` appears. The time zones do not have to
 match because synchronization and game timestamps use UTC.
 
-Install Tkinter on every machine that runs a GUI. For the Azure-host-player setup,
-install Tkinter and X11 authorization support on the VM too:
+Install Tkinter on every machine that runs a GUI. A headless Azure VM used only as the
+remote server does not need Tkinter or X11 support:
 
 ```bash
-sudo apt install -y python3-tk xauth
+sudo apt install -y python3-tk
 python3 -c "import tkinter; print('Tkinter', tkinter.TkVersion)"
 ```
 
@@ -165,42 +168,45 @@ sudo ufw allow from LAPTOP_PUBLIC_IP to any port 8765 proto tcp
 
 Replace `LAPTOP_PUBLIC_IP` with the laptop's numeric public IP.
 
-## 5. Start the Azure host player
+## 5. Start the authoritative server on Azure
 
-Because the Azure VM is headless, connect from the laptop with X11 forwarding. The game
-process runs on Azure while its native Tkinter window is displayed on the laptop:
+Connect normally—X11 forwarding is not required—and start the server:
 
 ```bash
-ssh -X -i ~/.ssh/pearl-harbor-key.pem azureuser@AZURE_PUBLIC_IP
+ssh -i ~/.ssh/pearl-harbor-key.pem azureuser@AZURE_PUBLIC_IP
 cd ~/pearl-harbor
 source .venv/bin/activate
-python gui_client.py --host
+python server.py --host 0.0.0.0 --port 8765
 ```
 
-The GUI automatically detects SSH-forwarded X11 and enables a low-bandwidth rendering
-mode. It retains the real ship and flag illustrations, but reuses lightweight water
-graphics, reduces radar refresh traffic, and updates existing grid cells instead of
-rebuilding both boards. Use `--full-graphics` only when the display is local to the VM;
-forcing full graphics through internet X11 is significantly slower.
-
-In that Azure window choose a country, keep port `8765`, and click **Create lobby**. At
-that moment the Azure VM becomes both the authoritative server and the host player. Copy
-the displayed six-character code.
-
-In another SSH terminal, these optional checks should print a listening socket and `OK`:
+Leave that terminal open. In another SSH terminal, these optional checks should print a
+listening socket and `OK`:
 
 ```bash
 ss -ltnp | grep 8765
 curl http://127.0.0.1:8765/healthz
 ```
 
-Do not also run `server.py`; Host Operation starts it automatically. When the host exits
-or acknowledges the victory/defeat report and returns to the main menu, the server it
-started is stopped.
+The Azure process owns all lobby, fleet, turn, hit, and clock state. No GUI assets are
+transmitted from Azure.
 
-## 6. Join from the Ubuntu laptop
+## 6. Run the host and guest GUIs locally
 
-On the Ubuntu laptop, open its own local GUI:
+On the host player's Ubuntu laptop, open a local GUI configured for Remote Azure:
+
+```bash
+cd "$HOME/Special Topics in Networking/Client-Server Application"
+source .venv/bin/activate
+python gui_client.py --host --remote-host \
+  --uri ws://AZURE_PUBLIC_IP:8765/ws
+```
+
+Choose **Host Operation**, select US or Japan, confirm **Remote Azure**, and create the
+lobby. Copy its six-character code. The GUI is rendered locally and should respond as
+quickly as the normal laptop instance.
+
+On the guest player's computer—or in a second terminal on the same laptop—open another
+local GUI:
 
 ```bash
 cd "$HOME/Special Topics in Networking/Client-Server Application"
@@ -209,8 +215,9 @@ python gui_client.py \
   --uri ws://AZURE_PUBLIC_IP:8765/ws
 ```
 
-Choose **Join Operation**, enter the lobby code, and connect. The laptop guest is assigned
-the country opposing the Azure host. This laptop runs only the client for this match.
+Choose **Join Operation**, enter the lobby code, and connect. The guest is assigned the
+country opposing the host. Both graphical clients connect to the authoritative Azure
+server, but all graphics and assets remain local to their respective player computers.
 
 If the GUI cannot connect, check in this order: Azure server process, `ss`, UFW,
 Azure NSG source address, and the VM public IP.
