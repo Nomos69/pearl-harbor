@@ -28,9 +28,12 @@ BATTLEFIELD_ASSET = Path(__file__).with_name("assets") / "backgrounds" / "pearl_
 class NavalIcons:
     """Create and cache small transparent PhotoImages used by board buttons."""
 
-    def __init__(self, master: tk.Misc, cell_size: int = 28) -> None:
+    def __init__(
+        self, master: tk.Misc, cell_size: int = 28, low_bandwidth: bool = False
+    ) -> None:
         self.master = master
         self.cell_size = cell_size
+        self.low_bandwidth = low_bandwidth
         self.cache: dict[tuple[Any, ...], ImageTk.PhotoImage] = {}
         self.sources: dict[str, Image.Image] = {}
         self.battlefield = self._load_battlefield()
@@ -50,6 +53,8 @@ class NavalIcons:
         row: int | None = None,
         column: int | None = None,
     ) -> ImageTk.PhotoImage:
+        if self.low_bandwidth:
+            row = column = None
         key = ("real-segment", name, orientation, index, length, hit, row, column)
         if key in self.cache:
             return self.cache[key]
@@ -145,6 +150,8 @@ class NavalIcons:
         return self._photo(key, image)
 
     def _load_battlefield(self) -> Image.Image | None:
+        if self.low_bandwidth:
+            return None
         if not BATTLEFIELD_ASSET.exists():
             return None
         size = self.cell_size * 10
@@ -258,7 +265,7 @@ class NavalIcons:
         key = ("command-map", width, height)
         if key in self.cache:
             return self.cache[key]
-        if BATTLEFIELD_ASSET.exists():
+        if BATTLEFIELD_ASSET.exists() and not self.low_bandwidth:
             source = Image.open(BATTLEFIELD_ASSET).convert("RGB")
             image = ImageOps.fit(source, (width, height), method=Image.Resampling.LANCZOS)
         else:
@@ -295,6 +302,8 @@ class NavalIcons:
         return self._photo(key, image)
 
     def target(self, row: int | None = None, column: int | None = None) -> ImageTk.PhotoImage:
+        if self.low_bandwidth:
+            row = column = None
         key = ("target", row, column)
         if key in self.cache:
             return self.cache[key]
@@ -310,6 +319,8 @@ class NavalIcons:
         return self._photo(key, self._on_battlefield(image, row, column))
 
     def water(self, row: int | None = None, column: int | None = None) -> ImageTk.PhotoImage:
+        if self.low_bandwidth:
+            row = column = None
         key = ("water", row, column)
         if key in self.cache:
             return self.cache[key]
@@ -324,6 +335,8 @@ class NavalIcons:
         return self._photo(key, image)
 
     def hit(self, row: int | None = None, column: int | None = None) -> ImageTk.PhotoImage:
+        if self.low_bandwidth:
+            row = column = None
         key = ("hit", row, column)
         if key in self.cache:
             return self.cache[key]
@@ -333,6 +346,8 @@ class NavalIcons:
         return self._photo(key, self._on_battlefield(image, row, column))
 
     def miss(self, row: int | None = None, column: int | None = None) -> ImageTk.PhotoImage:
+        if self.low_bandwidth:
+            row = column = None
         key = ("miss", row, column)
         if key in self.cache:
             return self.cache[key]

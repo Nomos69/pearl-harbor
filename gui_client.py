@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import queue
 import subprocess
 import threading
@@ -59,6 +60,12 @@ class BattleshipGUI:
     def __init__(self, root: tk.Tk, args: argparse.Namespace) -> None:
         self.root = root
         self.args = args
+        remote_x11 = bool(os.environ.get("SSH_CONNECTION")) and os.environ.get(
+            "DISPLAY", ""
+        ).startswith("localhost:")
+        self.low_bandwidth = getattr(args, "low_bandwidth", False) or (
+            remote_x11 and not getattr(args, "full_graphics", False)
+        )
         self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
         self.worker: NetworkWorker | None = None
         self.server_process: subprocess.Popen[bytes] | None = None
@@ -93,12 +100,21 @@ class BattleshipGUI:
         self.radar_status_label: tk.Label | None = None
         self.radar_contacts: list[tuple[int, int, int, float]] = []
         self.radar_sweep_degrees = 35.0
+        self.placement_buttons: dict[tuple[int, int], tk.Button] = {}
+        self.fleet_button_widgets: dict[str, tk.Button] = {}
+        self.game_own_buttons: dict[tuple[int, int], tk.Button] = {}
+        self.game_target_buttons: dict[tuple[int, int], tk.Button] = {}
+        self.game_turn_status: tk.Label | None = None
+        self.game_own_status: tk.Label | None = None
+        self.game_target_status: tk.Label | None = None
+        self.game_report_label: tk.Label | None = None
+        self.game_network_label: tk.Label | None = None
 
         self.root.title("Pearl Harbor")
         self.root.geometry("1180x780")
         self.root.minsize(940, 680)
         self.root.configure(bg=COLORS["background"])
-        self.icons = NavalIcons(root)
+        self.icons = NavalIcons(root, low_bandwidth=self.low_bandwidth)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self._configure_styles()
         self._build_header()
@@ -156,6 +172,15 @@ class BattleshipGUI:
         self.radar_canvas = None
         self.radar_status_label = None
         self.radar_contacts = []
+        self.placement_buttons = {}
+        self.fleet_button_widgets = {}
+        self.game_own_buttons = {}
+        self.game_target_buttons = {}
+        self.game_turn_status = None
+        self.game_own_status = None
+        self.game_target_status = None
+        self.game_report_label = None
+        self.game_network_label = None
         for sequence in ("<Return>", "<Escape>", "1", "2", "3", "4"):
             self.root.unbind(sequence)
         for child in self.body.winfo_children():
@@ -243,6 +268,15 @@ class BattleshipGUI:
 
     def tactical_backdrop(self) -> None:
         """Place the shared dark command-map artwork behind a screen."""
+        if self.low_bandwidth:
+            background = tk.Frame(
+                self.body,
+                bg="#08151c",
+                highlightbackground=COLORS["steel"],
+                highlightthickness=1,
+            )
+            background.place(relx=0, rely=0, relwidth=1, relheight=1)
+            return
         backdrop = self.icons.command_map(1110, 650)
         background = tk.Label(
             self.body,
@@ -274,10 +308,7 @@ class BattleshipGUI:
     def show_main_menu(self) -> None:
         self.current_screen = "main_menu"
         self.clear_body()
-        backdrop = self.icons.command_map(1110, 650)
-        background = tk.Label(self.body, image=backdrop, bg=COLORS["background"], bd=0)
-        background.image = backdrop
-        background.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.tactical_backdrop()
 
         title_panel = tk.Frame(self.body, bg="#09161d", padx=30, pady=25)
         title_panel.place(relx=0.035, rely=0.12, relwidth=0.55)
@@ -1296,8 +1327,10 @@ class BattleshipGUI:
             self.radar_status_label.configure(
                 text=f"SCAN {int(self.radar_sweep_degrees):03d}°  //  {operation}"
             )
-        self.radar_sweep_degrees = (self.radar_sweep_degrees + 3.5) % 360
-        self.radar_after_id = self.root.after(50, self.animate_lobby_radar)
+        step = 9.0 if self.low_bandwidth else 3.5
+        interval = 180 if self.low_bandwidth else 50
+        self.radar_sweep_degrees = (self.radar_sweep_degrees + step) % 360
+        self.radar_after_id = self.root.after(interval, self.animate_lobby_radar)
 
     def copy_lobby_code(self) -> None:
         if not self.lobby_code:
@@ -1403,9 +1436,32 @@ class BattleshipGUI:
             tk.Label(parent, text=str(row + 1), bg=parent.cget("bg"), fg=COLORS["muted"], font=self.font_mono, width=2).grid(row=row + 1, column=0)
 
     def draw_placement_board(self) -> None:
-        for child in self.placement_board.winfo_children():
-            child.destroy()
-        self.draw_grid_labels(self.placement_board)
+        if not self.placement_buttons:
+            self.draw_grid_labels(self.placement_board)
+            initial_icon = self.icons.water(0, 0)
+            for row in range(10):
+                for column in range(10):
+                    button = tk.Button(
+                        self.placement_board,
+                        image=initial_icon,
+                        bg=COLORS["water"],
+                        activebackground=COLORS["water_hover"],
+                        relief="flat",
+                        bd=0,
+                        width=32,
+                        height=29,
+                        cursor="crosshair",
+                        command=lambda r=row, c=column: self.place_ship(r, c),
+                    )
+                    button.image = initial_icon
+                    button.grid(
+                        row=row + 1,
+                        column=column + 1,
+                        padx=2,
+                        pady=2,
+                        sticky="nsew",
+                    )
+                    self.placement_buttons[(row, column)] = button
         segments: dict[tuple[int, int], Any] = {}
         for name, placement in self.placements.items():
             cells = self.placement_cells(placement)
@@ -1421,20 +1477,22 @@ class BattleshipGUI:
         for row in range(10):
             for column in range(10):
                 icon = segments.get((row, column), self.icons.water(row, column))
-                button = tk.Button(
-                    self.placement_board,
+                button = self.placement_buttons[(row, column)]
+                background = (
+                    COLORS["cyan_dark"]
+                    if (row, column) in segments
+                    else COLORS["water"]
+                )
+                display_state = (str(icon), background)
+                if getattr(button, "_display_state", None) == display_state:
+                    continue
+                button.configure(
                     image=icon,
-                    bg=COLORS["cyan_dark"] if (row, column) in segments else COLORS["water"],
+                    bg=background,
                     activebackground=COLORS["water_hover"],
-                    relief="flat",
-                    bd=0,
-                    width=32,
-                    height=29,
-                    cursor="crosshair",
-                    command=lambda r=row, c=column: self.place_ship(r, c),
                 )
                 button.image = icon
-                button.grid(row=row + 1, column=column + 1, padx=2, pady=2, sticky="nsew")
+                button._display_state = display_state
 
     def placement_cells(self, placement: dict[str, Any]) -> list[tuple[int, int]]:
         return [
@@ -1505,34 +1563,39 @@ class BattleshipGUI:
         self.update_placement_controls()
 
     def draw_fleet_buttons(self) -> None:
-        for child in self.fleet_buttons.winfo_children():
-            child.destroy()
+        if not self.fleet_button_widgets:
+            for name in self.fleet_spec:
+                button = tk.Button(
+                    self.fleet_buttons,
+                    compound="right",
+                    anchor="w",
+                    command=lambda ship=name: self.select_ship(ship),
+                    activebackground=COLORS["alert_dark"],
+                    activeforeground="#ffffff",
+                    relief="flat",
+                    bd=0,
+                    padx=12,
+                    pady=9,
+                    font=self.font_mono,
+                    cursor="hand2",
+                )
+                button.pack(fill="x", pady=3)
+                self.fleet_button_widgets[name] = button
         for name, length in self.fleet_spec.items():
             placed = name in self.placements
             selected = name == self.selected_ship
             asset = self.fleet_assets.get(name, "Battleship")
-            button = tk.Button(
-                self.fleet_buttons,
+            icon = self.icons.fleet_ship(asset, length, selected or placed)
+            button = self.fleet_button_widgets[name]
+            button.configure(
                 text=f"{'DEPLOYED' if placed else 'SELECT'}   {name}",
-                image=self.icons.fleet_ship(asset, length, selected or placed),
-                compound="right",
-                anchor="w",
-                command=lambda ship=name: self.select_ship(ship),
+                image=icon,
                 bg=COLORS["alert_dark"] if selected else "#17242b",
                 fg=COLORS["gold"] if placed else "#ffffff" if selected else COLORS["text"],
-                activebackground=COLORS["alert_dark"],
-                activeforeground="#ffffff",
                 highlightbackground=COLORS["alert"] if selected else COLORS["steel"],
                 highlightthickness=1,
-                relief="flat",
-                bd=0,
-                padx=12,
-                pady=9,
-                font=self.font_mono,
-                cursor="hand2",
             )
-            button.image = self.icons.fleet_ship(asset, length, selected or placed)
-            button.pack(fill="x", pady=3)
+            button.image = icon
 
     def select_ship(self, name: str) -> None:
         self.selected_ship = name
@@ -1581,6 +1644,13 @@ class BattleshipGUI:
     def show_game(self) -> None:
         if not self.latest_state:
             return
+        if (
+            self.current_screen == "game"
+            and self.game_own_buttons
+            and self.game_target_buttons
+        ):
+            self.refresh_game()
+            return
         self.current_screen = "game"
         state = self.latest_state
         self.clear_body()
@@ -1616,26 +1686,27 @@ class BattleshipGUI:
         enemy_flag_label.image = enemy_flag
         enemy_flag_label.pack(side="left", padx=(8, 0))
         your_turn = state.get("current_turn") == state.get("you")
-        self.status_plate(
+        self.game_turn_status = self.status_plate(
             header,
             "●  FIRE AUTHORIZED // SELECT TARGET"
             if your_turn
             else f"●  STANDBY // {str(state.get('current_turn') or 'WAITING').upper()} COMMAND",
             active=your_turn,
-        ).pack(side="right", pady=5)
+        )
+        self.game_turn_status.pack(side="right", pady=5)
 
         boards = tk.Frame(self.body, bg=COLORS["background"])
         boards.pack(fill="both", expand=True)
         boards.columnconfigure(0, weight=1)
         boards.columnconfigure(1, weight=1)
-        own_panel = self.board_panel(
+        own_panel, self.game_own_status = self.board_panel(
             boards,
             "FRIENDLY NAVAL GRID",
             f"{state['own_ships_remaining']} UNITS AFLOAT",
             0,
             COLORS["cyan"],
         )
-        target_panel = self.board_panel(
+        target_panel, self.game_target_status = self.board_panel(
             boards,
             "HOSTILE TARGET GRID",
             f"{state['opponent_ships_remaining']} CONTACTS REMAIN",
@@ -1647,8 +1718,14 @@ class BattleshipGUI:
             state["own_board"],
             target=False,
             fleet=state.get("own_fleet"),
+            buttons=self.game_own_buttons,
         )
-        self.draw_game_board(target_panel, state["target_board"], target=True)
+        self.draw_game_board(
+            target_panel,
+            state["target_board"],
+            target=True,
+            buttons=self.game_target_buttons,
+        )
 
         intel = tk.Frame(self.body, bg=COLORS["panel"], highlightbackground=COLORS["steel"], highlightthickness=2)
         intel.pack(fill="x", pady=(12, 0))
@@ -1656,8 +1733,9 @@ class BattleshipGUI:
         report = tk.Frame(intel, bg=COLORS["panel"], padx=16, pady=10)
         report.pack(side="left", fill="both", expand=True)
         tk.Label(report, text="FIELD REPORT // LATEST INTELLIGENCE", bg=COLORS["panel"], fg=COLORS["alert"], font=self.font_mono).pack(anchor="w")
-        tk.Label(report, text=self.latest_event.upper(), bg=COLORS["panel"], fg=COLORS["text"], font=self.font_body).pack(anchor="w", pady=(3, 0))
-        tk.Label(
+        self.game_report_label = tk.Label(report, text=self.latest_event.upper(), bg=COLORS["panel"], fg=COLORS["text"], font=self.font_body)
+        self.game_report_label.pack(anchor="w", pady=(3, 0))
+        self.game_network_label = tk.Label(
             intel,
             text=f"NET {self.round_trip_text}\nSYNC {self.offset_text}",
             justify="right",
@@ -1666,7 +1744,50 @@ class BattleshipGUI:
             font=self.font_mono,
             padx=16,
             pady=10,
-        ).pack(side="right", fill="y")
+        )
+        self.game_network_label.pack(side="right", fill="y")
+
+    def refresh_game(self) -> None:
+        if not self.latest_state:
+            return
+        state = self.latest_state
+        your_turn = state.get("current_turn") == state.get("you")
+        if self.game_turn_status is not None:
+            self.game_turn_status.configure(
+                text=(
+                    "●  FIRE AUTHORIZED // SELECT TARGET"
+                    if your_turn
+                    else f"●  STANDBY // {str(state.get('current_turn') or 'WAITING').upper()} COMMAND"
+                ),
+                bg=COLORS["alert_dark"] if your_turn else "#17242b",
+                fg="#ffffff" if your_turn else COLORS["muted"],
+                highlightbackground=COLORS["alert"] if your_turn else COLORS["steel"],
+            )
+        if self.game_own_status is not None:
+            self.game_own_status.configure(
+                text=f"{state['own_ships_remaining']} UNITS AFLOAT"
+            )
+        if self.game_target_status is not None:
+            self.game_target_status.configure(
+                text=f"{state['opponent_ships_remaining']} CONTACTS REMAIN"
+            )
+        if self.game_report_label is not None:
+            self.game_report_label.configure(text=self.latest_event.upper())
+        if self.game_network_label is not None:
+            self.game_network_label.configure(
+                text=f"NET {self.round_trip_text}\nSYNC {self.offset_text}"
+            )
+        self.update_game_board(
+            self.game_own_buttons,
+            state["own_board"],
+            target=False,
+            fleet=state.get("own_fleet"),
+        )
+        self.update_game_board(
+            self.game_target_buttons,
+            state["target_board"],
+            target=True,
+        )
 
     def board_panel(
         self,
@@ -1675,17 +1796,18 @@ class BattleshipGUI:
         status: str,
         column: int,
         accent: str,
-    ) -> tk.Frame:
+    ) -> tuple[tk.Frame, tk.Label]:
         outer = tk.Frame(parent, bg=COLORS["panel"], padx=16, pady=12, highlightbackground=accent, highlightthickness=2)
         outer.grid(row=0, column=column, sticky="nsew", padx=(0, 8) if column == 0 else (8, 0))
         topline = tk.Frame(outer, bg=COLORS["panel"])
         topline.pack(fill="x", pady=(0, 8))
         tk.Label(topline, text=title, bg=COLORS["panel"], fg=accent, font=self.font_mono).pack(side="left")
-        tk.Label(topline, text=status, bg=COLORS["panel"], fg=COLORS["text"], font=self.font_label).pack(side="right")
+        status_label = tk.Label(topline, text=status, bg=COLORS["panel"], fg=COLORS["text"], font=self.font_label)
+        status_label.pack(side="right")
         tk.Frame(outer, bg=accent, height=2).pack(fill="x", pady=(0, 7))
         board = tk.Frame(outer, bg=COLORS["panel"])
         board.pack(expand=True)
-        return board
+        return board, status_label
 
     def fleet_segments(
         self, fleet: list[dict[str, Any]] | None
@@ -1708,8 +1830,47 @@ class BattleshipGUI:
         rows: list[str],
         target: bool,
         fleet: list[dict[str, Any]] | None = None,
+        buttons: dict[tuple[int, int], tk.Button] | None = None,
     ) -> None:
+        if buttons is None:
+            buttons = {}
         self.draw_grid_labels(parent)
+        initial_icon = self.icons.water(0, 0)
+        for row in range(10):
+            for column in range(10):
+                button = tk.Button(
+                    parent,
+                    image=initial_icon,
+                    bg=COLORS["water"],
+                    fg=COLORS["muted"],
+                    activeforeground=COLORS["text"],
+                    disabledforeground=COLORS["muted"],
+                    relief="flat",
+                    bd=0,
+                    width=32,
+                    height=29,
+                    state="disabled",
+                    cursor="arrow",
+                    command=lambda r=row, c=column: self.attack(r, c),
+                )
+                button.image = initial_icon
+                button.grid(
+                    row=row + 1,
+                    column=column + 1,
+                    padx=2,
+                    pady=2,
+                    sticky="nsew",
+                )
+                buttons[(row, column)] = button
+        self.update_game_board(buttons, rows, target, fleet)
+
+    def update_game_board(
+        self,
+        buttons: dict[tuple[int, int], tk.Button],
+        rows: list[str],
+        target: bool,
+        fleet: list[dict[str, Any]] | None = None,
+    ) -> None:
         segments = self.fleet_segments(fleet)
         for row in range(10):
             for column in range(10):
@@ -1736,26 +1897,41 @@ class BattleshipGUI:
                 elif value == "o":
                     icon = self.icons.miss(row, column)
                 attackable = target and self.can_attack and value == "."
-                if attackable:
+                visually_attackable = (
+                    target and value == "." and (self.can_attack or self.low_bandwidth)
+                )
+                if visually_attackable:
                     icon = self.icons.target(row, column)
-                button = tk.Button(
-                    parent,
+                button = buttons[(row, column)]
+                enabled = attackable or (
+                    self.low_bandwidth and target and value == "."
+                )
+                active_background = (
+                    COLORS["alert"] if visually_attackable else background
+                )
+                cursor = "crosshair" if visually_attackable else "arrow"
+                display_state = (
+                    str(icon),
+                    background,
+                    foreground,
+                    active_background,
+                    enabled,
+                    cursor,
+                )
+                if getattr(button, "_display_state", None) == display_state:
+                    continue
+                button.configure(
                     image=icon,
                     bg=background,
                     fg=foreground,
-                    activebackground=COLORS["alert"] if attackable else background,
+                    activebackground=active_background,
                     activeforeground=COLORS["text"],
                     disabledforeground=foreground,
-                    relief="flat",
-                    bd=0,
-                    width=32,
-                    height=29,
-                    state="normal" if attackable else "disabled",
-                    cursor="crosshair" if attackable else "arrow",
-                    command=lambda r=row, c=column: self.attack(r, c),
+                    state="normal" if enabled else "disabled",
+                    cursor=cursor,
                 )
                 button.image = icon
-                button.grid(row=row + 1, column=column + 1, padx=2, pady=2, sticky="nsew")
+                button._display_state = display_state
 
     def attack(self, row: int, column: int) -> None:
         if not self.can_attack or not self.worker:
@@ -2028,6 +2204,16 @@ def parse_args() -> argparse.Namespace:
         "--host",
         action="store_true",
         help="Open directly in the Host Operation country-selection flow.",
+    )
+    parser.add_argument(
+        "--low-bandwidth",
+        action="store_true",
+        help="Reduce image and animation traffic for remote X11 displays.",
+    )
+    parser.add_argument(
+        "--full-graphics",
+        action="store_true",
+        help="Disable automatic low-bandwidth mode on a remote X11 display.",
     )
     parser.add_argument("--token", help=argparse.SUPPRESS)
     return parser.parse_args()

@@ -177,6 +177,12 @@ source .venv/bin/activate
 python gui_client.py --host
 ```
 
+The GUI automatically detects SSH-forwarded X11 and enables a low-bandwidth rendering
+mode. It retains the real ship and flag illustrations, but reuses lightweight water
+graphics, reduces radar refresh traffic, and updates existing grid cells instead of
+rebuilding both boards. Use `--full-graphics` only when the display is local to the VM;
+forcing full graphics through internet X11 is significantly slower.
+
 In that Azure window choose a country, keep port `8765`, and click **Create lobby**. At
 that moment the Azure VM becomes both the authoritative server and the host player. Copy
 the displayed six-character code.
