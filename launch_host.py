@@ -62,7 +62,11 @@ def start_server(args: argparse.Namespace) -> subprocess.Popen[bytes]:
         ],
         cwd=PROJECT_DIR,
     )
-    wait_for_server(process, args.port, args.startup_timeout)
+    try:
+        wait_for_server(process, args.port, args.startup_timeout)
+    except (OSError, RuntimeError):
+        stop_process(process)
+        raise
     print("Server ready.")
     return process
 

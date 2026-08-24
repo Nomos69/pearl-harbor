@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 import math
 import queue
+import subprocess
+import threading
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 try:
     import tkinter as tk
@@ -26,6 +29,7 @@ from historical_data import (
 )
 from naval_icons import NavalIcons
 from network_client import NetworkWorker
+from launch_host import server_is_ready, start_server, stop_process
 
 
 COLORS = {
@@ -57,6 +61,9 @@ class BattleshipGUI:
         self.args = args
         self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
         self.worker: NetworkWorker | None = None
+        self.server_process: subprocess.Popen[bytes] | None = None
+        self.owns_server = False
+        self.closing = False
         self.player_name = ""
         self.fleet_spec: dict[str, int] = {}
         self.fleet_assets: dict[str, str] = {}
@@ -72,6 +79,8 @@ class BattleshipGUI:
         self.connection_mode = ""
         self.lobby_code = ""
         self.server_uri = args.uri
+        parsed_uri = urlparse(args.uri)
+        self.host_port = parsed_uri.port or 8765
         self.offset_text = "—"
         self.round_trip_text = "—"
         self.current_screen = ""
@@ -719,15 +728,19 @@ class BattleshipGUI:
             cursor="hand2",
             font=("DejaVu Sans Mono", 7, "bold"),
         ).pack(side="right")
-        self.uri_entry = self._labeled_entry(
-            inner, "SERVER WEBSOCKET ADDRESS", self.server_uri
+        self.host_port_entry = self._labeled_entry(
+            inner, "LOCAL SERVER PORT", str(self.host_port)
         )
         tk.Label(
             inner,
-            text="NO HOST KEY REQUIRED // SERVER GENERATES A 6-CHARACTER CODE.",
+            text=(
+                "THIS MACHINE BECOMES SERVER + PLAYER // NO HOST KEY REQUIRED\n"
+                "SERVER GENERATES A SHAREABLE 6-CHARACTER CODE."
+            ),
             bg=COLORS["panel"],
             fg=COLORS["gold"],
-            font=("DejaVu Sans Mono", 8),
+            font=("DejaVu Sans Mono", 7, "bold"),
+            justify="left",
         ).pack(anchor="w", pady=(8, 0))
         self.connect_button = self.make_button(
             inner, "CREATE LOBBY  →", self.host_lobby
@@ -911,33 +924,74 @@ class BattleshipGUI:
         if self.worker and self.worker.is_alive():
             return
         preferred_team = self.team_choice.get()
-        uri = self.uri_entry.get().strip()
-        if preferred_team not in TEAMS or not uri:
+        port_text = self.host_port_entry.get().strip()
+        if preferred_team not in TEAMS or not port_text:
             messagebox.showwarning(
                 "Missing information",
-                "Choose US or Japan and enter the server address.",
+                "Choose US or Japan and enter a local server port.",
             )
             return
-        if not uri.startswith(("ws://", "wss://")):
-            messagebox.showwarning("Invalid address", "The server address must begin with ws:// or wss://")
+        try:
+            port = int(port_text)
+        except ValueError:
+            messagebox.showwarning("Invalid port", "The server port must be a number.")
             return
-        self.connect_button.configure(state="disabled", text="CONNECTING…")
-        self.connection_label.configure(text="●  CONNECTING", fg=COLORS["yellow"])
+        if not 1 <= port <= 65535:
+            messagebox.showwarning(
+                "Invalid port", "The server port must be between 1 and 65535."
+            )
+            return
+        self.connect_button.configure(state="disabled", text="STARTING SERVER…")
+        self.connection_label.configure(text="●  STARTING HOST", fg=COLORS["yellow"])
         self.connection_mode = "host"
-        self.server_uri = uri
+        self.host_port = port
+        self.server_uri = f"ws://127.0.0.1:{port}/ws"
         self.lobby_code = ""
         self.player_name = ""
-        self.worker = NetworkWorker(
-            uri,
-            self.messages,
-            mode="host",
-            preferred_team=preferred_team,
-        )
-        self.worker.start()
         self.show_lobby(
-            "Creating operation lobby",
-            "Contacting the operation server and requesting a new lobby code.",
+            "Starting local operation server",
+            "This command station is becoming the server and preparing its player link.",
         )
+        threading.Thread(
+            target=self._prepare_host_server,
+            args=(port, preferred_team),
+            daemon=True,
+        ).start()
+
+    def _prepare_host_server(self, port: int, preferred_team: str) -> None:
+        process: subprocess.Popen[bytes] | None = None
+        reused_server = False
+        try:
+            if server_is_ready(port):
+                reused_server = True
+            else:
+                process = start_server(
+                    argparse.Namespace(
+                        listen_host="0.0.0.0",
+                        port=port,
+                        startup_timeout=5.0,
+                    )
+                )
+            if self.closing:
+                if process is not None:
+                    stop_process(process)
+                return
+            self.messages.put(
+                {
+                    "type": "local_server_ready",
+                    "port": port,
+                    "preferred_team": preferred_team,
+                    "process": process,
+                    "reused_server": reused_server,
+                }
+            )
+        except (OSError, RuntimeError) as exc:
+            self.messages.put(
+                {
+                    "type": "local_server_error",
+                    "message": str(exc),
+                }
+            )
 
     def join_lobby(self) -> None:
         if self.worker and self.worker.is_alive():
@@ -1808,6 +1862,7 @@ class BattleshipGUI:
         if self.worker:
             self.worker.close()
         self.worker = None
+        self.stop_owned_server()
 
         # Detach from any late messages emitted while the old socket is closing.
         self.messages = queue.Queue()
@@ -1829,6 +1884,12 @@ class BattleshipGUI:
         self.connection_label.configure(text="●  OFFLINE", fg=COLORS["muted"])
         self.show_main_menu()
 
+    def stop_owned_server(self) -> None:
+        if self.owns_server and self.server_process is not None:
+            stop_process(self.server_process)
+        self.server_process = None
+        self.owns_server = False
+
     def poll_messages(self) -> None:
         try:
             while True:
@@ -1839,7 +1900,44 @@ class BattleshipGUI:
 
     def handle_message(self, message: dict[str, Any]) -> None:
         message_type = message.get("type")
-        if message_type == "clock_sync":
+        if message_type == "local_server_ready":
+            process = message.get("process")
+            if isinstance(process, subprocess.Popen):
+                self.server_process = process
+                self.owns_server = True
+            else:
+                self.server_process = None
+                self.owns_server = False
+            port = int(message["port"])
+            preferred_team = str(message["preferred_team"])
+            self.server_uri = f"ws://127.0.0.1:{port}/ws"
+            self.connection_label.configure(
+                text="●  SERVER ONLINE", fg=COLORS["yellow"]
+            )
+            self.worker = NetworkWorker(
+                self.server_uri,
+                self.messages,
+                mode="host",
+                preferred_team=preferred_team,
+            )
+            self.worker.start()
+            source = (
+                "Using the operation server already active on this machine."
+                if message.get("reused_server")
+                else "Local operation server online. Requesting a new lobby code."
+            )
+            self.show_lobby("Creating operation lobby", source)
+        elif message_type == "local_server_error":
+            self.connection_label.configure(
+                text="●  HOST START FAILED", fg=COLORS["orange"]
+            )
+            self.connection_mode = ""
+            messagebox.showerror(
+                "Could not start host server",
+                f"{message['message']}\n\nTry another port or close the program using that port.",
+            )
+            self.show_host_setup()
+        elif message_type == "clock_sync":
             self.offset_text = f"{message['offset_ms']:+.1f} ms"
             self.round_trip_text = f"{message['round_trip_ms']:.1f} ms"
             self.connection_label.configure(text="●  LINK ACTIVE", fg=COLORS["cyan"])
@@ -1904,8 +2002,7 @@ class BattleshipGUI:
         elif message_type == "lobby_closed":
             self.connection_label.configure(text="●  LINK CLOSED", fg=COLORS["orange"])
             messagebox.showwarning("Lobby closed", str(message["message"]))
-            self.connection_mode = ""
-            self.show_main_menu()
+            self.return_to_main_menu()
         elif message_type in {"network_error", "connection_closed"}:
             self.connection_label.configure(text="●  LINK CLOSED", fg=COLORS["orange"])
             if self.current_screen != "result" and self.connection_mode:
@@ -1916,8 +2013,10 @@ class BattleshipGUI:
                     self.show_join_setup()
 
     def on_close(self) -> None:
+        self.closing = True
         if self.worker:
             self.worker.close()
+        self.stop_owned_server()
         self.root.destroy()
 
 

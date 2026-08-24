@@ -8,10 +8,12 @@ It does not use a browser, HTML, CSS, or JavaScript. An authoritative Python ser
 keeps both fleets private, validates turns, and exchanges JSON messages with each GUI
 over WebSockets.
 
-The main menu separates **Host Operation** from **Join Operation**. The host chooses US
-or Japan and creates a lobby immediately; the server returns a random six-character code.
-The guest enters that shareable code without choosing a country, and the server always
-assigns the country opposing the host. There can never be two US players or two Japan
+Every installation can perform either network role. The main menu separates **Host
+Operation** from **Join Operation**. Choosing Host makes that machine the authoritative
+server and a player at the same time; its GUI connects locally to the server it started.
+The host chooses US or Japan and receives a random six-character lobby code. Choosing
+Join starts no server: that machine connects as a client, enters the code, and is always
+assigned the country opposing the host. There can never be two US players or two Japan
 players.
 
 The GUI uses five distinct realistic top-down ship illustrations for the carrier,
@@ -54,11 +56,11 @@ Historical references: [U.S. Naval History and Heritage Command attack overview]
 [Prime Minister's Office of Japan](https://japan.kantei.go.jp/past_cabinet/index.html).
 
 ```text
-Azure Ubuntu VM: WebSocket server + host GUI process
+Azure Ubuntu VM (Host): authoritative server + host player GUI
                                       |
                          TCP 8765 / WebSocket
                                       |
-Ubuntu laptop: guest GUI + forwarded display for Azure host
+Ubuntu laptop (Join): guest player GUI/client only
 ```
 
 Follow these sections in order. Complete each check before moving to the next one.
@@ -105,21 +107,22 @@ python -c "import websockets; print(websockets.__version__)"
 
 It should print `17.0`.
 
-## 3. Test the native GUI locally
+## 3. Test both roles locally
 
-The fastest host setup is one command:
+Open terminal 1 and launch the first copy:
 
 ```bash
 cd "/path/to/Client-Server Application"
 source .venv/bin/activate
-python launch_host.py
+python gui_client.py
 ```
 
-This starts the local server, waits for its health check, and opens the GUI directly at
-the Host Operation country dossiers. Closing the GUI also stops the server started by the
-launcher. If a reused or newly started server disappears while the GUI is open, the
-launcher detects the failed health check and restarts it automatically. Open only the
-guest in a second terminal:
+Choose **Host Operation**, choose US or Japan, leave local server port `8765`, and click
+**Create lobby**. The GUI automatically starts `server.py` on this machine and also joins
+it as the host player. There is no server key and no separate server command. Copy the
+six-character code.
+
+Open terminal 2 and launch the second copy:
 
 ```bash
 cd "/path/to/Client-Server Application"
@@ -127,40 +130,16 @@ source .venv/bin/activate
 python gui_client.py --uri ws://127.0.0.1:8765/ws
 ```
 
-The equivalent manual three-terminal process is shown below.
-
-On the laptop, start the server in terminal 1:
-
-```bash
-cd "/path/to/Client-Server Application"
-source .venv/bin/activate
-python server.py
-```
-
-Start the first desktop window in terminal 2:
-
-```bash
-cd "/path/to/Client-Server Application"
-source .venv/bin/activate
-python gui_client.py
-```
-
-Start the second desktop window in terminal 3:
-
-```bash
-cd "/path/to/Client-Server Application"
-source .venv/bin/activate
-python gui_client.py
-```
-
-Two native Pearl Harbor windows should appear. In the first window choose **Host
-Operation**, select US or Japan, and create the lobby. Copy the generated lobby code. In
-the second window choose **Join Operation** and enter that code; no country selection is
-requested. The server automatically assigns the opposing country. Each side receives its
-own historically named fleet. Place five ships, then click
+Choose **Join Operation**, keep the address shown above, and enter the code. No country
+selection is requested. The server automatically assigns the opposing country. Each side
+receives its own historically named fleet. Place five ships, then click
 **Lock deployment**. The side that connected first attacks first by
 clicking an unknown cell on the enemy grid. A hit earns another attack; the turn passes
 to the opponent only after a miss.
+
+`python launch_host.py` remains available as a compatibility launcher. It starts the
+server before opening Host Operation; the GUI detects and reuses that server rather than
+starting a duplicate.
 
 ## 4. Open the Azure network path
 
@@ -186,47 +165,34 @@ sudo ufw allow from LAPTOP_PUBLIC_IP to any port 8765 proto tcp
 
 Replace `LAPTOP_PUBLIC_IP` with the laptop's numeric public IP.
 
-## 5. Start the server on Azure
+## 5. Start the Azure host player
 
-SSH into the Azure VM and run:
-
-```bash
-cd "/path/to/Client-Server Application"
-source .venv/bin/activate
-python server.py
-```
-
-In another SSH terminal, verify it:
-
-```bash
-ss -ltnp | grep 8765
-curl http://127.0.0.1:8765/healthz
-```
-
-The first command should show `0.0.0.0:8765`; the second should print `OK`.
-
-## 6. Run the Azure host player and laptop guest
-
-The Azure VM is headless, so open a second laptop terminal with X11 forwarding. The
+Because the Azure VM is headless, connect from the laptop with X11 forwarding. The game
 process runs on Azure while its native Tkinter window is displayed on the laptop:
 
 ```bash
 ssh -X -i ~/.ssh/pearl-harbor-key.pem azureuser@AZURE_PUBLIC_IP
 cd ~/pearl-harbor
 source .venv/bin/activate
-python gui_client.py \
-  --uri ws://127.0.0.1:8765/ws
+python gui_client.py --host
 ```
 
-Instead of starting the Azure server and host GUI separately, the X11-forwarded Azure
-session can launch both with:
+In that Azure window choose a country, keep port `8765`, and click **Create lobby**. At
+that moment the Azure VM becomes both the authoritative server and the host player. Copy
+the displayed six-character code.
+
+In another SSH terminal, these optional checks should print a listening socket and `OK`:
 
 ```bash
-python launch_host.py --listen-host 0.0.0.0
+ss -ltnp | grep 8765
+curl http://127.0.0.1:8765/healthz
 ```
 
-In that window choose **Host Operation**, select the host country, create the lobby, and
-copy the displayed six-character code.
+Do not also run `server.py`; Host Operation starts it automatically. When the host exits
+or acknowledges the victory/defeat report and returns to the main menu, the server it
+started is stopped.
+
+## 6. Join from the Ubuntu laptop
 
 On the Ubuntu laptop, open its own local GUI:
 
@@ -238,14 +204,15 @@ python gui_client.py \
 ```
 
 Choose **Join Operation**, enter the lobby code, and connect. The laptop guest is assigned
-the country opposing the Azure host.
+the country opposing the Azure host. This laptop runs only the client for this match.
 
 If the GUI cannot connect, check in this order: Azure server process, `ss`, UFW,
 Azure NSG source address, and the VM public IP.
 
-## 7. Install the Azure server as a service
+## 7. Optional: install a permanent Azure server service
 
-After the manual Azure test works:
+The automatic Host flow above does not require a service. Install one only if you want
+the Azure server to remain online when no GUI is open. After the manual Azure test works:
 
 ```bash
 sudo useradd --system --home /opt/battleship --shell /usr/sbin/nologin battleship
